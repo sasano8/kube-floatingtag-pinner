@@ -5,8 +5,8 @@ package collector
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"time"
 )
 
 // Target is an image to track together with the resources that reference it.
@@ -25,25 +25,26 @@ type Registry interface {
 	Digest(ctx context.Context, image string) (string, error)
 }
 
-// Entry is what the local registry holds for an image.
-type Entry struct {
-	Digest    string
-	UpdatedAt time.Time
-}
+// ErrPullNotImplemented is returned by a Local that cannot bring images in yet.
+var ErrPullNotImplemented = errors.New("pull is not implemented for this local")
 
-// Store is the local registry: the digest we currently regard as the baseline.
-type Store interface {
-	Get(ctx context.Context, image string) (Entry, bool, error)
-	Put(ctx context.Context, image string, e Entry) error
+// Local is the local registry: where images actually live on this side
+// (e.g. the container runtime image store of the nodes, or a registry we sync to).
+// It holds the images themselves; nothing is recorded separately.
+type Local interface {
+	// Digests lists the digests of the image's repository that are present locally.
+	Digests(ctx context.Context, image string) ([]string, error)
+	// Pull brings the image at the given digest into the local registry.
+	Pull(ctx context.Context, image, digest string) error
 }
 
 // OnNew decides what to do with an image the store has no record of.
 type OnNew string
 
 const (
-	// OnNewRegister records the remote digest as the baseline (no diff reported).
+	// OnNewRegister pulls the image into the local registry.
 	OnNewRegister OnNew = "register"
-	// OnNewIgnore leaves the image unrecorded and reports nothing.
+	// OnNewIgnore does nothing for an image the local registry has never held.
 	OnNewIgnore OnNew = "ignore"
 )
 
@@ -59,27 +60,28 @@ func ParseOnNew(s string) (OnNew, error) {
 type Status string
 
 const (
-	StatusRegistered Status = "registered" // first seen, baseline recorded
-	StatusIgnored    Status = "ignored"    // first seen, left alone
-	StatusUnchanged  Status = "unchanged"
-	StatusChanged    Status = "changed" // remote digest differs from the store
-	StatusError      Status = "error"
+	StatusNew       Status = "new"       // local holds nothing of this repository; handled per OnNew
+	StatusIgnored   Status = "ignored"   // new, and OnNew is ignore
+	StatusUnchanged Status = "unchanged" // local already holds the remote digest
+	StatusChanged   Status = "changed"   // local holds other digests, not the remote one
+	StatusError     Status = "error"
 )
 
 type Result struct {
 	Target
-	Status Status
-	Old    string // digest in the store before this run
-	New    string // digest on the remote registry
-	Err    error
+	Status  Status
+	Remote  string   // digest on the remote registry
+	Local   []string // digests of the repository present locally
+	Pulled  bool
+	PullErr error // set when a pull was attempted and failed
+	Err     error
 }
 
 type Collector struct {
 	Source   Source
 	Registry Registry
-	Store    Store
+	Local    Local
 	OnNew    OnNew
-	Now      func() time.Time
 }
 
 // CollectOnce runs one pass. Per-image failures are reported in the results;
@@ -89,49 +91,56 @@ func (c *Collector) CollectOnce(ctx context.Context) ([]Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list targets: %w", err)
 	}
-	now := time.Now
-	if c.Now != nil {
-		now = c.Now
-	}
 	results := make([]Result, 0, len(targets))
 	for _, t := range targets {
-		results = append(results, c.collect(ctx, t, now()))
+		results = append(results, c.collect(ctx, t))
 	}
 	return results, nil
 }
 
-func (c *Collector) collect(ctx context.Context, t Target, now time.Time) Result {
+func (c *Collector) collect(ctx context.Context, t Target) Result {
 	r := Result{Target: t}
 	fail := func(err error) Result { r.Status, r.Err = StatusError, err; return r }
 
-	old, found, err := c.Store.Get(ctx, t.Image)
-	if err != nil {
-		return fail(fmt.Errorf("store get: %w", err))
-	}
-	r.Old = old.Digest
-
-	if !found && c.OnNew == OnNewIgnore {
-		r.Status = StatusIgnored
-		return r
-	}
-
-	digest, err := c.Registry.Digest(ctx, t.Image)
+	remote, err := c.Registry.Digest(ctx, t.Image)
 	if err != nil {
 		return fail(fmt.Errorf("registry digest: %w", err))
 	}
-	r.New = digest
+	r.Remote = remote
+
+	local, err := c.Local.Digests(ctx, t.Image)
+	if err != nil {
+		return fail(fmt.Errorf("local digests: %w", err))
+	}
+	r.Local = local
 
 	switch {
-	case !found:
-		r.Status = StatusRegistered
-	case old.Digest == digest:
+	case contains(local, remote):
 		r.Status = StatusUnchanged
 		return r
+	case len(local) == 0:
+		if c.OnNew == OnNewIgnore {
+			r.Status = StatusIgnored
+			return r
+		}
+		r.Status = StatusNew
 	default:
 		r.Status = StatusChanged
 	}
-	if err := c.Store.Put(ctx, t.Image, Entry{Digest: digest, UpdatedAt: now}); err != nil {
-		return fail(fmt.Errorf("store put: %w", err))
+
+	if err := c.Local.Pull(ctx, t.Image, remote); err != nil {
+		r.PullErr = err
+		return r
 	}
+	r.Pulled = true
 	return r
+}
+
+func contains(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }

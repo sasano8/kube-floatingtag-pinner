@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -17,14 +18,14 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/sasano8/kube-floatingtag-pinner/internal/collector"
+	"github.com/sasano8/kube-floatingtag-pinner/internal/local"
 	"github.com/sasano8/kube-floatingtag-pinner/internal/registry"
 	"github.com/sasano8/kube-floatingtag-pinner/internal/source"
-	"github.com/sasano8/kube-floatingtag-pinner/internal/store"
 )
 
 const usage = `usage: pinner <once|run> [flags]
 
-  once   collect one time and exit (note: the in-memory store is empty each time)
+  once   collect one time and exit (suits a CronJob)
   run    collect repeatedly every --interval until stopped
 `
 
@@ -44,6 +45,7 @@ func main() {
 	namespace := fs.String("namespace", "", "namespace to watch (default: all)")
 	annotation := fs.String("annotation", source.DefaultAnnotation, "annotation that marks target resources")
 	onNew := fs.String("on-new", string(collector.OnNewRegister), "for images with no record: register|ignore")
+	localKind := fs.String("local", "node", "local registry: node (container runtime image store of the nodes)")
 	interval := fs.Duration("interval", 5*time.Minute, "run mode: time between passes")
 	fs.Parse(os.Args[2:])
 
@@ -60,10 +62,17 @@ func main() {
 		fatal(err)
 	}
 
+	var loc collector.Local
+	switch *localKind {
+	case "node":
+		loc = &local.Node{Client: client}
+	default:
+		fatal(fmt.Errorf("unknown --local %q (supported: node)", *localKind))
+	}
 	c := &collector.Collector{
 		Source:   &source.Kube{Client: client, Namespace: *namespace, Annotation: *annotation},
 		Registry: registry.Remote{},
-		Store:    store.NewMemory(),
+		Local:    loc,
 		OnNew:    policy,
 	}
 
@@ -95,17 +104,20 @@ func pass(ctx context.Context, c *collector.Collector) bool {
 	}
 	ok := true
 	for _, r := range results {
-		attrs := []any{"image", r.Image, "owners", r.Owners}
-		switch r.Status {
-		case collector.StatusChanged:
-			slog.Warn("digest changed", append(attrs, "old", r.Old, "new", r.New)...)
-		case collector.StatusRegistered:
-			slog.Info("registered", append(attrs, "digest", r.New)...)
-		case collector.StatusError:
+		attrs := []any{"image", r.Image, "owners", r.Owners, "remote", r.Remote, "local", r.Local}
+		switch {
+		case r.Status == collector.StatusError:
 			ok = false
 			slog.Error("failed", append(attrs, "err", r.Err)...)
+		case r.PullErr != nil && errors.Is(r.PullErr, collector.ErrPullNotImplemented):
+			slog.Warn(string(r.Status)+": pull needed but not supported by this local", attrs...)
+		case r.PullErr != nil:
+			ok = false
+			slog.Error(string(r.Status)+": pull failed", append(attrs, "err", r.PullErr)...)
+		case r.Status == collector.StatusChanged || r.Status == collector.StatusNew:
+			slog.Warn(string(r.Status), append(attrs, "pulled", r.Pulled)...)
 		default:
-			slog.Info(string(r.Status), append(attrs, "digest", r.New)...)
+			slog.Info(string(r.Status), attrs...)
 		}
 	}
 	return ok

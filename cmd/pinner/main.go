@@ -1,5 +1,5 @@
 // Command pinner collects images from annotated Kubernetes resources and
-// reports where the remote registry has moved on from the local registry.
+// syncs the local cache (node image stores) with the remote registry.
 package main
 
 import (
@@ -24,24 +24,9 @@ import (
 	"github.com/sasano8/kube-floatingtag-pinner/internal/source"
 )
 
-const usage = `usage: pinner <once|run> [flags]
-
-  once   collect one time and exit (suits a CronJob)
-  run    collect repeatedly every --interval until stopped
-`
-
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprint(os.Stderr, usage)
-		os.Exit(2)
-	}
-	mode := os.Args[1]
-	if mode != "once" && mode != "run" {
-		fmt.Fprint(os.Stderr, usage)
-		os.Exit(2)
-	}
-
-	fs := flag.NewFlagSet(mode, flag.ExitOnError)
+	fs := flag.NewFlagSet("pinner", flag.ExitOnError)
+	daemon := fs.Bool("daemon", false, "keep running: collect every --interval until stopped (default: collect once and exit)")
 	kubeconfig := fs.String("kubeconfig", "", "path to kubeconfig (default: in-cluster, then ~/.kube/config)")
 	namespace := fs.String("namespace", "", "namespace to watch (default: all)")
 	annotation := fs.String("annotation", source.DefaultAnnotation, "annotation that marks target resources")
@@ -51,8 +36,8 @@ func main() {
 	pullNS := fs.String("pull-namespace", "default", "namespace for the short-lived Pods that make nodes pull images")
 	pullSecret := fs.String("pull-secret", "", "imagePullSecret name (in --pull-namespace) for private registries")
 	pullTimeout := fs.Duration("pull-timeout", 2*time.Minute, "per-node timeout for a pull")
-	interval := fs.Duration("interval", 5*time.Minute, "run mode: time between passes")
-	fs.Parse(os.Args[2:])
+	interval := fs.Duration("interval", 5*time.Minute, "with --daemon: time between passes")
+	fs.Parse(os.Args[1:])
 
 	policy, err := collector.ParseOnNew(*onNew)
 	if err != nil {
@@ -84,7 +69,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if mode == "once" {
+	if !*daemon {
 		if !pass(ctx, c) {
 			os.Exit(1)
 		}

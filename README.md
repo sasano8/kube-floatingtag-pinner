@@ -97,8 +97,8 @@ digest を別に記録することはしない（正本はリモートのレジ�
 # 対象にしたいリソースに annotation を付ける
 kubectl annotate deployment/myapp floatingtag-pinner/enabled=true
 
-go run ./cmd/pinner once                     # 1回だけ（CronJob 向き）
-go run ./cmd/pinner run --interval 5m        # 常駐して繰り返す
+go run ./cmd/pinner                          # 1回だけ実行して終了（既定）
+go run ./cmd/pinner --daemon --interval 5m   # 常駐して繰り返す
 ```
 
 | フラグ | 既定値 | 説明 |
@@ -109,7 +109,8 @@ go run ./cmd/pinner run --interval 5m        # 常駐して繰り返す
 | `--pull-namespace` | `default` | pull 用 Pod を作る名前空間 |
 | `--pull-secret` | なし | 非公開レジストリ用の imagePullSecret 名（`--pull-namespace` 内） |
 | `--pull-timeout` | `2m` | ノードごとの pull の待ち時間 |
-| `--interval` | `5m` | `run` の実行間隔 |
+| `--daemon` | なし | 常駐して `--interval` ごとに繰り返す。指定しなければ 1 回で終了 |
+| `--interval` | `5m` | `--daemon` 時の実行間隔 |
 | `--namespace` | 全て | 対象の名前空間 |
 | `--annotation` | `floatingtag-pinner/enabled` | 対象を示す annotation（値 `"true"`） |
 | `--kubeconfig` | in-cluster → `~/.kube/config` | |

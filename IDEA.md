@@ -80,7 +80,7 @@ image 欄は Argo CD の管理下にあるため、自作 resolver が書くと 
 - `ignoreDifferences` / `managedFieldsManagers` が、この組み合わせ（ksvc・Deployment の image 欄）で効くか。
 - ksvc の `image` を `latest@sha256:...` に書き換えたときの挙動（新 Revision の作成、digest 固定）。
 - Revision を消すと Configuration が再作成するか（配信中は断が出うるので使わない方針）。
-- Keel が ksvc に使えるか（未調査）。
+- Keel が ksvc に使えるか → **調査済み: 使えない見込み**（下の「Keel の調査結果」参照）。
 - Knative 本体に `latest` 自動追従の機能が無いこと（検索で見つからなかっただけ）。
 
 ## 既存の関連物
@@ -93,4 +93,15 @@ image 欄は Argo CD の管理下にあるため、自作 resolver が書くと 
   `:latest` を明記済み・未コミット）。第一段階の動作確認では、ここに annotation を付けて試せる。
 - 関連する検討: [plugins/reloader](../reloader)（ConfigMap / Secret の変更でローリング再起動。イメージ更新とは別）。
 
+## Keel の調査結果（ksvc に使えるか）
 
+結論: **ksvc には使えない見込み**（公式ドキュメント・ソースの範囲での確認。実機では未検証）。
+
+- Keel の対象は Helm / DaemonSet / StatefulSet / Deployment。Knative Service の記載は見当たらない
+  （[keel-hq/keel](https://github.com/keel-hq/keel)）。
+- provider は `kubernetes`（標準ワークロードのみ）と `helm3` の2つで、Knative 用は無い
+  （[provider/](https://github.com/keel-hq/keel/tree/master/provider)。一覧は表示上すべてとは限らない）。
+- 可変タグ（`latest`）の追従は可能: `keel.sh/policy: force` + `keel.sh/matchTag: "true"` で、
+  ポーリング時にマニフェストの digest を比較して検知できる。ただし更新先は上記の標準ワークロードに限られる。
+- よって Deployment 等は Keel で足りる可能性があるが、ksvc は別手段が要る。
+  「Deployment と ksvc を1つの仕組みに統一する」方針（上記）の根拠が補強された。

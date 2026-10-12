@@ -80,8 +80,8 @@ image 欄は Argo CD の管理下にあるため、自作 resolver が書くと 
 - `ignoreDifferences` / `managedFieldsManagers` が、この組み合わせ（ksvc・Deployment の image 欄）で効くか。
 - ksvc の `image` を `latest@sha256:...` に書き換えたときの挙動（新 Revision の作成、digest 固定）。
 - Revision を消すと Configuration が再作成するか（配信中は断が出うるので使わない方針）。
-- Keel が ksvc に使えるか → **調査済み: 使えない見込み**（下の「Keel の調査結果」参照）。
-- Knative 本体に `latest` 自動追従の機能が無いこと → **調査済み: 無い見込み**（下の「Knative の調査結果」参照）。
+- Keel が ksvc に使えるか → **調査済み: 使えない見込み**（[README.md](./README.md) の「既存ツールの対応状況」参照）。
+- Knative 本体に `latest` 自動追従の機能が無いこと → **調査済み: 無い見込み**（[README.md](./README.md) の「既存ツールの対応状況」参照）。
 
 ## 既存の関連物
 
@@ -92,34 +92,3 @@ image 欄は Argo CD の管理下にあるため、自作 resolver が書くと 
 - 検証用の ksvc は `apps/tutorial/manifests/hello-ksvc-*.yml`（`hello-ksvc-grpc.yml` / `hello-ksvc-websocket.yml` は
   `:latest` を明記済み・未コミット）。第一段階の動作確認では、ここに annotation を付けて試せる。
 - 関連する検討: [plugins/reloader](../reloader)（ConfigMap / Secret の変更でローリング再起動。イメージ更新とは別）。
-
-## Keel の調査結果（ksvc に使えるか）
-
-結論: **ksvc には使えない見込み**（公式ドキュメント・ソースの範囲での確認。実機では未検証）。
-
-- Keel の対象は Helm / DaemonSet / StatefulSet / Deployment。Knative Service の記載は見当たらない
-  （[keel-hq/keel](https://github.com/keel-hq/keel)）。
-- provider は `kubernetes`（標準ワークロードのみ）と `helm3` の2つで、Knative 用は無い
-  （[provider/](https://github.com/keel-hq/keel/tree/master/provider)。一覧は表示上すべてとは限らない）。
-- 可変タグ（`latest`）の追従は可能: `keel.sh/policy: force` + `keel.sh/matchTag: "true"` で、
-  ポーリング時にマニフェストの digest を比較して検知できる。ただし更新先は上記の標準ワークロードに限られる。
-- よって Deployment 等は Keel で足りる可能性があるが、ksvc は別手段が要る。
-  「Deployment と ksvc を1つの仕組みに統一する」方針（上記）の根拠が補強された。
-
-## Knative の調査結果（`latest` 自動追従の有無）
-
-結論: **Knative 本体に `latest` への自動追従は無い**（ソースと Issue から。実機では未検証）。
-
-- タグ → digest の解決は、リゾルバが `remote.Head` を1回呼ぶだけ。ループ・タイマー・キャッシュ・watch は無く、
-  タグが後で動いても追従しない
-  （[resolve.go](https://github.com/knative/serving/blob/main/pkg/reconciler/revision/resolve.go)。
-  呼び出し側が再解決するかは、このファイルだけでは判断できない）。
-- Revision 作成時に digest へ解決し、`Revision.status.imageDigest` に入る。Revision は不変なので、
-  `image:latest` に push しても既存 Revision は変わらず、新しい Revision を作るまで反映されない
-  （[#12654](https://github.com/knative/serving/issues/12654)、[#12475](https://github.com/knative/serving/issues/12475)）。
-  `imagePullPolicy: Always` でも解決済み digest が使われるため効かない。
-- `registries-skipping-tag-resolving`（`config-deployment`）で解決を省くレジストリを指定できるが、
-  追従させる機能ではなく、解決自体をやめる設定。image に digest を直接書いた場合も解決は省かれる。
-- 確認できていない点: 公式ドキュメントに「追従しない」と明記したページは見つからなかった
-  （knative.dev は取得できなかった）。コントローラの全コードやリリースノートの網羅確認はしていない。
-  確定させるには実機で、`latest` を push した後に新 Revision ができないことを確かめる。

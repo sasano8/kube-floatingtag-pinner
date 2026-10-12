@@ -96,6 +96,14 @@ flowchart LR
 - 実機の検証結果: `app-authorization-demo` のイメージを更新して `latest` に push したが、
   `latest` を参照する ksvc は約20分経っても最新のイメージに更新されなかった（新 Revision もできない）。
   検証時は Argo CD Image Updater を動かしていない（Knative 本体のみの挙動）。
+- 確認した値（2026-10-12）: `ghcr.io/sasano8/app-authorization-demo:latest` を参照する最新の Revision
+  `app-authorization-demo-00007`（06:46 UTC 作成）の `status.containerStatuses[0].imageDigest` は
+  `sha256:4a45bcf8…` のまま。レジストリ上の `latest` の現在の digest は `sha256:bf16c8e0…`
+  （`docker buildx imagetools inspect` で取得）で、**一致しない**。
+  Revision 00005 / 00006 / 00007 は、それぞれ作成時点の `latest` の digest（`fdb79066…` / `f84b09ad…` / `4a45bcf8…`）で
+  固定されており、Revision を作った時にだけ解決される挙動とも合う。
+- 最新 digest の確認: `crane digest <image>:latest`、または `docker buildx imagetools inspect <image>:latest`。
+  Revision 側は `kubectl get revision -o custom-columns=NAME:.metadata.name,CREATED:.metadata.creationTimestamp,DIGEST:.status.containerStatuses[0].imageDigest`。
 
 - タグ → digest の解決は、リゾルバが `remote.Head` を1回呼ぶだけ。ループ・タイマー・キャッシュ・watch は無く、
   タグが後で動いても追従しない

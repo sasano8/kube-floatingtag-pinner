@@ -1,11 +1,16 @@
-// Package local holds Local implementations (the local registry).
+// Package local holds Local implementations (the local cache of images).
 package local
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/name"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -13,18 +18,25 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
-
-	"github.com/sasano8/kube-floatingtag-pinner/internal/collector"
 )
 
-var nodes = schema.GroupVersionResource{Version: "v1", Resource: "nodes"}
+var (
+	nodes   = schema.GroupVersionResource{Version: "v1", Resource: "nodes"}
+	podsGVR = schema.GroupVersionResource{Version: "v1", Resource: "pods"}
+)
 
 // Node reads the image stores of the cluster's nodes through Node.status.images
-// (kubelet reports at most 50 images per node). Images are brought in by the
-// kubelet when a Pod needs them, so Pull is not implemented yet.
-// Digests are the union over all nodes.
+// (kubelet reports at most 50 images per node). Digests are the union over all nodes.
+//
+// Pull makes every Ready node's kubelet pull the image by running a short-lived Pod
+// pinned to that node. The Pod's command does not exist, so the container never runs;
+// only the pull matters. The Pod is deleted once the image has been pulled.
 type Node struct {
 	Client dynamic.Interface
+
+	PullNamespace string        // namespace for the pull Pods (default "default")
+	PullSecret    string        // optional imagePullSecret name in PullNamespace
+	PullTimeout   time.Duration // per node (default 2m)
 }
 
 func (n *Node) Digests(ctx context.Context, image string) ([]string, error) {
@@ -65,8 +77,128 @@ func (n *Node) Digests(ctx context.Context, image string) ([]string, error) {
 	return out, nil
 }
 
-func (n *Node) Pull(context.Context, string, string) error {
-	return collector.ErrPullNotImplemented
+func (n *Node) Pull(ctx context.Context, image, digest string) error {
+	repo, err := repoOf(image)
+	if err != nil {
+		return err
+	}
+	ref := repo + "@" + digest
+
+	list, err := n.Client.Resource(nodes).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("list nodes: %w", err)
+	}
+	var (
+		wg   sync.WaitGroup
+		mu   sync.Mutex
+		errs []error
+	)
+	for i := range list.Items {
+		node := &list.Items[i]
+		if !ready(node) {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := n.pullOn(ctx, node.GetName(), ref); err != nil {
+				mu.Lock()
+				errs = append(errs, fmt.Errorf("node %s: %w", node.GetName(), err))
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	return errors.Join(errs...)
+}
+
+func (n *Node) pullOn(ctx context.Context, node, ref string) error {
+	ns := n.PullNamespace
+	if ns == "" {
+		ns = "default"
+	}
+	timeout := n.PullTimeout
+	if timeout == 0 {
+		timeout = 2 * time.Minute
+	}
+	sum := sha256.Sum256([]byte(ref + "|" + node))
+	podName := "pinner-pull-" + hex.EncodeToString(sum[:5])
+
+	spec := map[string]interface{}{
+		"nodeName":      node,
+		"restartPolicy": "Never",
+		"containers": []interface{}{map[string]interface{}{
+			"name":            "pull",
+			"image":           ref,
+			"imagePullPolicy": "IfNotPresent",
+			"command":         []interface{}{"/floatingtag-pinner-pull-only"},
+		}},
+	}
+	if n.PullSecret != "" {
+		spec["imagePullSecrets"] = []interface{}{map[string]interface{}{"name": n.PullSecret}}
+	}
+	pod := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "v1", "kind": "Pod",
+		"metadata": map[string]interface{}{
+			"name": podName, "namespace": ns,
+			"labels":      map[string]interface{}{"app.kubernetes.io/managed-by": "floatingtag-pinner"},
+			"annotations": map[string]interface{}{"floatingtag-pinner/image": ref, "floatingtag-pinner/node": node},
+		},
+		"spec": spec,
+	}}
+
+	pods := n.Client.Resource(podsGVR).Namespace(ns)
+	if _, err := pods.Create(ctx, pod, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create pull pod: %w", err)
+	}
+	defer pods.Delete(context.WithoutCancel(ctx), podName, metav1.DeleteOptions{})
+
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	for {
+		got, err := pods.Get(ctx, podName, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("get pull pod: %w", err)
+		}
+		if done, err := pullState(got); done || err != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timed out waiting for pull of %s", ref)
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+// pullState inspects the pull Pod: pulled once the container status carries an
+// imageID; failed when the kubelet reports an image pull error.
+func pullState(pod *unstructured.Unstructured) (done bool, err error) {
+	css, _, _ := unstructured.NestedSlice(pod.Object, "status", "containerStatuses")
+	for _, c := range css {
+		m, _ := c.(map[string]interface{})
+		if id, _ := m["imageID"].(string); id != "" {
+			return true, nil
+		}
+		reason, _, _ := unstructured.NestedString(m, "state", "waiting", "reason")
+		switch reason {
+		case "ErrImagePull", "ImagePullBackOff", "InvalidImageName", "ErrImageNeverPull":
+			msg, _, _ := unstructured.NestedString(m, "state", "waiting", "message")
+			return false, fmt.Errorf("%s: %s", reason, msg)
+		}
+	}
+	return false, nil
+}
+
+func ready(node *unstructured.Unstructured) bool {
+	conds, _, _ := unstructured.NestedSlice(node.Object, "status", "conditions")
+	for _, c := range conds {
+		m, _ := c.(map[string]interface{})
+		if m["type"] == "Ready" {
+			return m["status"] == "True"
+		}
+	}
+	return false
 }
 
 // repoOf normalizes an image reference to its repository name

@@ -28,13 +28,13 @@ type Registry interface {
 // ErrPullNotImplemented is returned by a Local that cannot bring images in yet.
 var ErrPullNotImplemented = errors.New("pull is not implemented for this local")
 
-// Local is the local registry: where images actually live on this side
+// Local is the local cache of images: where images actually live on this side
 // (e.g. the container runtime image store of the nodes, or a registry we sync to).
 // It holds the images themselves; nothing is recorded separately.
 type Local interface {
 	// Digests lists the digests of the image's repository that are present locally.
 	Digests(ctx context.Context, image string) ([]string, error)
-	// Pull brings the image at the given digest into the local registry.
+	// Pull brings the image at the given digest into the local cache.
 	Pull(ctx context.Context, image, digest string) error
 }
 
@@ -42,7 +42,7 @@ type Local interface {
 type OnNew string
 
 const (
-	// OnNewRegister pulls the image into the local registry.
+	// OnNewRegister pulls the image into the local cache.
 	OnNewRegister OnNew = "register"
 	// OnNewIgnore does nothing for an image the local registry has never held.
 	OnNewIgnore OnNew = "ignore"

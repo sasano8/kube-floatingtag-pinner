@@ -3,12 +3,17 @@ package local_test
 import (
 	"context"
 	"reflect"
+	"sort"
+	"strings"
 	"testing"
+	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/sasano8/kube-floatingtag-pinner/internal/local"
 )
@@ -50,5 +55,66 @@ func TestDigests(t *testing.T) {
 	got, _ = n.Digests(context.Background(), "busybox:latest")
 	if !reflect.DeepEqual(got, []string{"sha256:ccc"}) {
 		t.Fatalf("got %v", got)
+	}
+}
+
+func readyNode(name string) *unstructured.Unstructured {
+	n := node(name)
+	n.Object["status"].(map[string]interface{})["conditions"] = []interface{}{
+		map[string]interface{}{"type": "Ready", "status": "True"}}
+	return n
+}
+
+func TestPull(t *testing.T) {
+	gvr := func(r string) schema.GroupVersionResource {
+		return schema.GroupVersionResource{Version: "v1", Resource: r}
+	}
+	notReady := node("down")
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr("nodes"): "NodeList", gvr("pods"): "PodList"},
+		readyNode("n1"), readyNode("n2"), notReady)
+
+	// the "kubelet": a created pod comes back with its image pulled
+	var created []string
+	client.PrependReactor("create", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		u := a.(k8stesting.CreateAction).GetObject().(*unstructured.Unstructured)
+		created = append(created, u.Object["spec"].(map[string]interface{})["nodeName"].(string))
+		u.Object["status"] = map[string]interface{}{"containerStatuses": []interface{}{
+			map[string]interface{}{"imageID": "ghcr.io/o/app@sha256:bbb"}}}
+		return false, nil, nil
+	})
+
+	n := &local.Node{Client: client, PullNamespace: "pull", PullTimeout: 5 * time.Second}
+	if err := n.Pull(context.Background(), "ghcr.io/o/app:latest", "sha256:bbb"); err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(created)
+	if !reflect.DeepEqual(created, []string{"n1", "n2"}) {
+		t.Fatalf("pods created on %v (NotReady nodes must be skipped)", created)
+	}
+	left, _ := client.Resource(gvr("pods")).Namespace("pull").List(context.Background(), metav1.ListOptions{})
+	if len(left.Items) != 0 {
+		t.Fatalf("pull pods must be deleted, left %d", len(left.Items))
+	}
+}
+
+func TestPullReportsImagePullError(t *testing.T) {
+	gvr := func(r string) schema.GroupVersionResource {
+		return schema.GroupVersionResource{Version: "v1", Resource: r}
+	}
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr("nodes"): "NodeList", gvr("pods"): "PodList"},
+		readyNode("n1"))
+	client.PrependReactor("create", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		u := a.(k8stesting.CreateAction).GetObject().(*unstructured.Unstructured)
+		u.Object["status"] = map[string]interface{}{"containerStatuses": []interface{}{
+			map[string]interface{}{"state": map[string]interface{}{"waiting": map[string]interface{}{
+				"reason": "ErrImagePull", "message": "unauthorized"}}}}}
+		return false, nil, nil
+	})
+	n := &local.Node{Client: client, PullTimeout: 5 * time.Second}
+	err := n.Pull(context.Background(), "ghcr.io/o/app:latest", "sha256:bbb")
+	if err == nil || !strings.Contains(err.Error(), "ErrImagePull") {
+		t.Fatalf("err = %v", err)
 	}
 }

@@ -46,6 +46,9 @@ func main() {
 	annotation := fs.String("annotation", source.DefaultAnnotation, "annotation that marks target resources")
 	onNew := fs.String("on-new", string(collector.OnNewRegister), "for images with no record: register|ignore")
 	localKind := fs.String("local", "node", "local registry: node (container runtime image store of the nodes)")
+	pullNS := fs.String("pull-namespace", "default", "namespace for the short-lived Pods that make nodes pull images")
+	pullSecret := fs.String("pull-secret", "", "imagePullSecret name (in --pull-namespace) for private registries")
+	pullTimeout := fs.Duration("pull-timeout", 2*time.Minute, "per-node timeout for a pull")
 	interval := fs.Duration("interval", 5*time.Minute, "run mode: time between passes")
 	fs.Parse(os.Args[2:])
 
@@ -65,7 +68,7 @@ func main() {
 	var loc collector.Local
 	switch *localKind {
 	case "node":
-		loc = &local.Node{Client: client}
+		loc = &local.Node{Client: client, PullNamespace: *pullNS, PullSecret: *pullSecret, PullTimeout: *pullTimeout}
 	default:
 		fatal(fmt.Errorf("unknown --local %q (supported: node)", *localKind))
 	}

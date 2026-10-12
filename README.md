@@ -68,13 +68,13 @@ flowchart LR
 
 ## 既存ツールの対応状況
 
-調べた範囲では、ksvc の `latest` 追従を満たす既存ツールは見つかっていない。いずれも実機では未検証。
+調べた範囲では、ksvc の `latest` 追従を満たす既存ツールは見つかっていない。実機で確認済みなのは Knative 本体のみ（下記）。
 
 | ツール | Deployment 等 | ksvc | 備考 |
 | --- | :---: | :---: | --- |
 | Keel | ○ | ×（見込み） | `policy: force` + `matchTag` で可変タグの digest 変化を検知できるが、対象は標準ワークロードと Helm のみ |
-| Knative 本体 | - | ×（見込み） | タグ解決は Revision 作成時の1回のみ。追従機能は無い |
-| Argo CD Image Updater | △ | △ | `digest` 戦略 + `argocd` 書き戻しで、Helm / Kustomize のソースのみ更新可。導入済み |
+| Knative 本体 | - | ×（実機で確認） | タグ解決は Revision 作成時の1回のみ。追従機能は無い |
+| Argo CD Image Updater | △ | △ | `digest` 戦略 + `argocd` 書き戻しで、Helm / Kustomize のソースのみ更新可。導入済みだが未稼働のため未検証 |
 
 ### Keel（ksvc に使えるか）
 
@@ -91,7 +91,11 @@ flowchart LR
 
 ### Knative 本体（`latest` 自動追従の有無）
 
-結論: **Knative 本体に `latest` への自動追従は無い**（ソースと Issue から。実機では未検証）。
+結論: **Knative 本体に `latest` への自動追従は無い**（ソース・Issue に加え、実機でも確認）。
+
+- 実機の検証結果: `app-authorization-demo` のイメージを更新して `latest` に push したが、
+  `latest` を参照する ksvc は約20分経っても最新のイメージに更新されなかった（新 Revision もできない）。
+  検証時は Argo CD Image Updater を動かしていない（Knative 本体のみの挙動）。
 
 - タグ → digest の解決は、リゾルバが `remote.Head` を1回呼ぶだけ。ループ・タイマー・キャッシュ・watch は無く、
   タグが後で動いても追従しない
@@ -103,9 +107,8 @@ flowchart LR
   `imagePullPolicy: Always` でも解決済み digest が使われるため効かない。
 - `registries-skipping-tag-resolving`（`config-deployment`）で解決を省くレジストリを指定できるが、
   追従させる機能ではなく、解決自体をやめる設定。image に digest を直接書いた場合も解決は省かれる。
-- 確認できていない点: 公式ドキュメントに「追従しない」と明記したページは見つからなかった
-  （knative.dev は取得できなかった）。コントローラの全コードやリリースノートの網羅確認はしていない。
-  確定させるには実機で、`latest` を push した後に新 Revision ができないことを確かめる。
+- 公式ドキュメントに「追従しない」と明記したページは見つからなかった（knative.dev は取得できなかった）が、
+  実機の結果と一致するため、仕様として扱ってよい。
 
 ## 未決事項
 

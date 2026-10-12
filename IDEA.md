@@ -80,8 +80,8 @@ image 欄は Argo CD の管理下にあるため、自作 resolver が書くと 
 - `ignoreDifferences` / `managedFieldsManagers` が、この組み合わせ（ksvc・Deployment の image 欄）で効くか。
 - ksvc の `image` を `latest@sha256:...` に書き換えたときの挙動（新 Revision の作成、digest 固定）。
 - Revision を消すと Configuration が再作成するか（配信中は断が出うるので使わない方針）。
-- Keel が ksvc に使えるか → **調査済み: 使えない見込み**（[README.md](./README.md) の「既存ツールの対応状況」参照）。
-- Knative 本体に `latest` 自動追従の機能が無いこと → **確認済み: 無い（実機で確認）**（[README.md](./README.md) の「既存ツールの対応状況」参照）。
+- Keel が ksvc に使えるか → **調査済み: 使えない見込み**（[docs/research/existing-tools.md](./docs/research/existing-tools.md)参照）。
+- Knative 本体に `latest` 自動追従の機能が無いこと → **確認済み: 無い（実機で確認）**（[docs/research/existing-tools.md](./docs/research/existing-tools.md)参照）。
 
 ## 既存の関連物
 

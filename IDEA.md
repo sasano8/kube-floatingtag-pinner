@@ -1,8 +1,8 @@
-# kube-floatingtag-pinner（未実装・設計済み）
+# kube-floatingtag-pinner（設計メモ。第一段階は実装済み・[README.md](./README.md) 参照）
 
 annotation で対象を指定したワークロード（Deployment / StatefulSet / DaemonSet / Knative Service）の
 イメージを定期監視し、`latest` などの可変タグの指す実体（digest）が変わったら、新しいイメージで
-動かし直す自作の仕組み。第一段階（収集・変化検知）から実装する。
+動かし直す自作の仕組み。第一段階（収集・差分検知・pull）は実装済みで、このメモは未実装の部分（第二段階以降）を中心に残す。
 
 ## 背景
 
@@ -34,37 +34,27 @@ annotation で対象を指定したワークロード（Deployment / StatefulSet
 
 ## 方針（決定済み）
 
-- 対象は annotation で宣言する（例: `image-resolver/enabled: "true"`）。ワークロード自身の
-  `metadata.annotations` に置く（Revision には伝わらない）。
 - Deployment と ksvc で仕組みを分けず、**1つの resolver に統一**する（Image Updater との二重化を避ける）。
-- 手段は最小から始める: CronJob + `crane` + `kubectl` の bash。必要になったらコントローラ化（kopf / shell-operator / kubebuilder 等）。
-- 置き場所は `plugins/image-resolver/`（[plugins/argocd](../argocd) 等と同じ規約。`scripts/plugin-install.sh image-resolver` で入れられる形にする）。
 
-## 第一段階: 収集と変化検知（読み取りのみ）
+## 第一段階の残課題
 
-ワークロードを一切変更しない。Argo CD との衝突も起きない。
+実装済みの範囲は [README.md](./README.md) を参照（収集、リモートの digest 取得、ローカルキャッシュ（ノードのイメージストア）との比較、
+差分時の pull、ログ出力、`once` / `run`）。残っているのは次の点。
 
-1. `image-resolver/enabled: "true"` が付いた Deployment / StatefulSet / DaemonSet / ksvc を一覧する。
-2. Pod テンプレートの `containers[].image` / `initContainers[].image`（ksvc は `spec.template.spec.containers[].image`）を取り出し、重複を除く。
-3. イメージごとにレジストリの digest を取る（`crane digest <image>`）。定期実行。
-4. 前回の digest（ConfigMap などに保存）と比べ、**変わったイメージ**を検知する。
-5. 結果を出力する: イメージ、参照元リソース、前回と今回の digest、変化の有無
-   （ConfigMap / ログ / Event / メトリクスのいずれか）。
-
-この段階で確かめること: annotation による対象の拾い方、レジストリ認証（非公開レジストリ）、
-rate limit（Docker Hub の匿名アクセスの上限）、重複除去。
+- 実機での確認: pull 用 Pod（存在しないコマンドで kubelet に pull だけさせる）が、使っているランタイムで期待どおり動くか。
+- レジストリ認証（非公開レジストリ）と、rate limit（Docker Hub の匿名アクセスの上限）の確認。
+- 結果の出力先の追加: Event / メトリクス（現状はログのみ）。
 
 ## 第二段階: 反映
 
-変化を検知したら、spec の image に digest を書く。
+差分を検知したら（ローカルキャッシュと、リソースが実際に使っている digest の食い違い。[README.md](./README.md) 参照）、spec の image に digest を書く。
 
 - 書き方: `image: repo:latest@sha256:<新しい digest>`（kubelet は digest があるとタグを無視する。`latest` を残せば読みやすい）。
 - ksvc: image 変更で新しい Revision ができ、その digest で固定される。
 - Deployment: Pod テンプレートの変更でローリングが走り、全 Pod が同一 digest になる。
 - annotation にだけ digest を入れる案は、Deployment では **Pod ごとにずれるため不採用**
   （image 欄が `latest` のままのため）。
-- 補強として、書き込み要否の判断に Pod の `imageID` / Revision の `imageDigest` との突き合わせを足す
-  （実際に古いか）。Node の `status.images` も参考にできるが必須ではない。
+- 書き込み要否の判断には、Pod の `imageID` / Revision の `imageDigest`（実際に古いか）との突き合わせを使う。
 
 ## 第三段階: Argo CD との折り合い（第二段階の実運用前に必要）
 
@@ -77,11 +67,10 @@ image 欄は Argo CD の管理下にあるため、自作 resolver が書くと 
 
 ## 未確認事項
 
+- 既存ツールの調査結果は [docs/research/existing-tools.md](./docs/research/existing-tools.md) に移した（Keel は ksvc に使えない見込み、Knative 本体は `latest` に追従しない）。
 - `ignoreDifferences` / `managedFieldsManagers` が、この組み合わせ（ksvc・Deployment の image 欄）で効くか。
 - ksvc の `image` を `latest@sha256:...` に書き換えたときの挙動（新 Revision の作成、digest 固定）。
 - Revision を消すと Configuration が再作成するか（配信中は断が出うるので使わない方針）。
-- Keel が ksvc に使えるか → **調査済み: 使えない見込み**（[docs/research/existing-tools.md](./docs/research/existing-tools.md)参照）。
-- Knative 本体に `latest` 自動追従の機能が無いこと → **確認済み: 無い（実機で確認）**（[docs/research/existing-tools.md](./docs/research/existing-tools.md)参照）。
 
 ## 既存の関連物
 

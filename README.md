@@ -15,7 +15,7 @@
 | 段階 | 機能 |
 | --- | --- |
 | 第一段階 | 収集・差分検知・取得（ワークロードは変更しない） |
-| 第二段階 | 検知した差分に対する反映（デプロイヤー） |
+| 第二段階 | 実行中のものが古ければ再デプロイ（デプロイヤー。spec の image は書き換えない） |
 
 ### 登場人物
 
@@ -24,11 +24,11 @@
 | リモートレジストリ | タグ → digest の正本（Docker Hub など） | ○ | |
 | ローカルキャッシュ | Kubernetes が pull して各ノードに保持しているイメージ（containerd 等のイメージストア）。Harbor のようなレジストリを建てるものではない。同期先に任意のレジストリを使う形も将来は想定 | ○ | ○ |
 | Kubernetes リソース | 所定の annotation が付いた Deployment / StatefulSet / DaemonSet / Knative Service。参照元 | ○ | ○ |
-| コレクター | 第一段階: リソースからイメージを収集し、リモートレジストリとローカルキャッシュを比較、差分があれば pull。第二段階: リソースの image 指定とローカルキャッシュの digest を比較し、差分を検知 | ○ | ○ |
-| デプロイヤー | 検知した差分に対し適切な処置（spec の image に digest を書く等）を行う | | ○ |
+| コレクター | 第一段階: リソースからイメージを収集し、リモートレジストリとローカルキャッシュを比較、差分があれば pull。第二段階: ローカルキャッシュの digest と、実行中の Pod / Revision の digest を比較し、差分を検知 | ○ | ○ |
+| デプロイヤー | 検知した差分に対し再デプロイする（Deployment 等は Pod の削除、Knative は新 Revision の作成）。対象と操作は annotation で指定 | | ○ |
 
-> 第二段階ではリモートレジストリとの直接のやり取りは行わない。ローカルキャッシュを基準に、リソースの image 指定（spec の文字列）との差分を検知し、デプロイヤーに渡す。
-> 実行中の Pod / Revision が実際に使っている digest は見ない。
+> 第二段階ではリモートレジストリとの直接のやり取りは行わない。ローカルキャッシュの digest と、実行中の Pod の `imageID`（Knative は Revision の `imageDigest`）を比べ、不一致なら再デプロイする。
+> spec の image は書き換えない。
 
 ## 概要図
 
@@ -58,9 +58,9 @@ flowchart TB
 
     C -- "① 対象イメージを収集" --> K
     C -- "② ローカルの digest を取得" --> L
-    C -- "③ リソースの image 指定と<br/>ローカルの digest を比較" --> K
-    C -- "④ 差分を検知したら通知" --> D
-    D -- "⑤ 適切な処置<br/>(image に digest を反映 等)" --> K
+    C -- "③ 実行中の Pod / Revision が<br/>使っている digest を取得" --> K
+    C -- "④ ローカルと不一致なら通知" --> D
+    D -- "⑤ 再デプロイ<br/>(Pod の削除 等)" --> K
 ```
 
 ## 動作の流れ（第一段階）
@@ -74,7 +74,7 @@ flowchart TB
    - 何も無い（初見）: `--on-new` に従う。`register` は pull、`ignore` は何もしない。
 
 digest を別に記録することはしない（正本はリモートのレジストリ、状態はローカルキャッシュ自身が持つ）。
-リソースの image 指定との突き合わせは、第二段階で行う。
+実行中の Pod との突き合わせと再デプロイは、第二段階で行う。
 
 ## 使い方（最小実装）
 
@@ -128,8 +128,6 @@ Keel・Knative 本体・Argo CD Image Updater では、ksvc の `latest` 追従�
 ## 未決事項
 
 - annotation のキー名（IDEA.md では仮に `image-resolver/enabled: "true"`）。
-- 第二段階では、`repo:tag@sha256:…`（タグ付きで固定した image。第二段階でこのツール自身が書く形）を収集対象に残す。
-  タグが新しい digest を指したら、固定先を更新するため。`repo@sha256:…`（タグ無し）は対象外のまま。現状は `@` を含むものをすべて除いている。
 - 任意のレジストリを同期先にする `--local`（`registry`）。
 - pull 用 Pod の RBAC と実行用マニフェスト（Dockerfile、CronJob / Deployment）。
 - 実行形態の追加（CronJob 用のイメージ・マニフェスト、operator 化）。

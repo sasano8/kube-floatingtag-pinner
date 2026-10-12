@@ -45,31 +45,46 @@ annotation で対象を指定したワークロード（Deployment / StatefulSet
 - レジストリ認証（非公開レジストリ）と、rate limit（Docker Hub の匿名アクセスの上限）の確認。
 - 結果の出力先の追加: Event / メトリクス（現状はログのみ）。
 
-## 第二段階: 反映
+## 第二段階: 再デプロイ
 
-差分を検知したら（ローカルキャッシュの digest と、リソースの image 指定の食い違い。実行中の Pod / Revision の digest は見ない。[README.md](./README.md) 参照）、spec の image に digest を書く。
+spec の image は書き換えない（ユーザーの管轄のものにはあまり触らない）。実行中のものが古ければ、再デプロイして
+kubelet / Knative に新しいイメージを取り直させる。リモートレジストリは登場しない（pull は第一段階が済ませている）。
 
-- 書き方: `image: repo:latest@sha256:<新しい digest>`（kubelet は digest があるとタグを無視する。`latest` を残せば読みやすい）。
-- ksvc: image 変更で新しい Revision ができ、その digest で固定される。
-- Deployment: Pod テンプレートの変更でローリングが走り、全 Pod が同一 digest になる。
-- annotation にだけ digest を入れる案は、Deployment では **Pod ごとにずれるため不採用**
-  （image 欄が `latest` のままのため）。
-- 書き込み要否は、spec の image 指定とローカルキャッシュの digest の比較で決める（Pod の `imageID` / Revision の `imageDigest` は見ない）。
+- 差分の検知: ローカルキャッシュの digest と、実行中の Pod の `status.containerStatuses[].imageID`
+  （ksvc は Revision の `status.containerStatuses[].imageDigest`）を比べ、不一致なら再デプロイする。
+  実行中のものを見るので、ツールが止まっていた間の変化や、最初から古かったリソースも拾える。
+- 操作（種類ごと）:
+  - Deployment / StatefulSet / DaemonSet: Pod を削除する（spec を触らない）。または Pod テンプレートに
+    `restartedAt` の annotation を付けて段階的に入れ替える。
+  - Knative Service: Pod を消しても同じ digest で作り直されるだけ（Revision は不変）。ksvc の `spec.template` に
+    annotation を足して新しい Revision を作る（タグはそのときに解決し直される）。
+- どの操作をするかは annotation で指定する（案: `floatingtag-pinner/action: delete-pods | restart | none`）。
+- 前提: 再デプロイで新しいイメージを使うには、ノードの `latest` タグが新しいイメージを指している必要がある
+  （第一段階の pull をタグ指定にしている理由）。
 
-## 第三段階: Argo CD との折り合い（第二段階の実運用前に必要）
+### 採らなかった案: spec の image に digest を書く（`repo:latest@sha256:…`）
 
-image 欄は Argo CD の管理下にあるため、自作 resolver が書くと `selfHeal` で戻される。
+困るケースが多いため、採らない。
 
-- 案1（自作で統一するなら本命）: Application に `ignoreDifferences`（image 欄の jqPathExpressions、または
-  resolver 専用の field manager 名を `managedFieldsManagers` で指定）と `syncOptions: RespectIgnoreDifferences=true`。
-  欠点: 変更が git に残らない。git 側で image を変えても反映されなくなる。
-- 案2: Application の `kustomize.images` に書く（Image Updater の `argocd` 方式）。衝突しないが Kustomize 化が必要で、実質 Image Updater。
+- マニフェストを push / `kubectl apply` するたびに `latest` に戻り、ローリングが走り、ツールがまた書き込む（行き来）。
+- Argo CD / Flux の selfHeal に戻される。Helm の upgrade に上書きされる。server-side apply の field manager が衝突する。
+- git とクラスタが食い違い、git が正本でなくなる。spec は `latest` と読めるのに実際は固定された digest で動く。
+- ツールが止まると、固定された古い digest のまま残り、新しい Pod もそれを使う。
+- Kyverno / OPA のポリシー（タグ必須、署名検証）に弾かれうる。
+- Knative で、`latest@sha256:…` への書き換えが期待どおり新 Revision を作るか未確認。
+
+## 第三段階: Argo CD との折り合い（第二段階の実運用前に確認）
+
+image を書き換えないので、selfHeal との衝突は大きく減る。ただし次を確認する。
+
+- Pod の削除は spec を変えないので影響しない見込み。
+- テンプレートへの annotation（`restartedAt` や ksvc の template annotation）を、Argo CD が差分として戻さないか。
+  戻す場合は `ignoreDifferences` を使う。
 
 ## 未確認事項
 
 - 既存ツールの調査結果は [docs/research/existing-tools.md](./docs/research/existing-tools.md) に移した（Keel は ksvc に使えない見込み、Knative 本体は `latest` に追従しない）。
-- `ignoreDifferences` / `managedFieldsManagers` が、この組み合わせ（ksvc・Deployment の image 欄）で効くか。
-- ksvc の `image` を `latest@sha256:...` に書き換えたときの挙動（新 Revision の作成、digest 固定）。
+- ksvc の `spec.template` に annotation を足したとき、新しい Revision ができ、そのとき `latest` が解決し直されること。
 - Revision を消すと Configuration が再作成するか（配信中は断が出うるので使わない方針）。
 
 ## 既存の関連物

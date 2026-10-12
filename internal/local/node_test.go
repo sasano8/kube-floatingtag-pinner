@@ -79,6 +79,10 @@ func TestPull(t *testing.T) {
 	client.PrependReactor("create", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		u := a.(k8stesting.CreateAction).GetObject().(*unstructured.Unstructured)
 		created = append(created, u.Object["spec"].(map[string]interface{})["nodeName"].(string))
+		c := u.Object["spec"].(map[string]interface{})["containers"].([]interface{})[0].(map[string]interface{})
+		if c["image"] != "ghcr.io/o/app:latest" {
+			t.Errorf("pull image = %v, want the tag reference", c["image"])
+		}
 		u.Object["status"] = map[string]interface{}{"containerStatuses": []interface{}{
 			map[string]interface{}{"imageID": "ghcr.io/o/app@sha256:bbb"}}}
 		return false, nil, nil

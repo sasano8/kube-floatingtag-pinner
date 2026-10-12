@@ -102,7 +102,8 @@ go run ./cmd/pinner run --interval 5m        # 常駐して繰り返す
 
 現状の制約:
 
-- `node` の pull: Ready な各ノードに、そのノード固定（`nodeName`）の短命な Pod を作り、kubelet に `repo@digest` を pull させる。
+- `node` の pull: Ready な各ノードに、そのノード固定（`nodeName`）の短命な Pod を作り、kubelet にタグ指定（`repo:latest` など、ワークロードと同じ参照）で pull させる。ノード上のタグが新しいイメージに付け替わり、
+  あとで `IfNotPresent` の Pod が作られても新しいイメージで起動する。
   Pod のコマンドは存在しないものにしてあり、コンテナは動かない（pull だけが目的）。pull 完了後に Pod は削除する。
   必要な権限: Node の list、`--pull-namespace` での Pod の create / get / delete。
   ワークロードの spec は変更しない。

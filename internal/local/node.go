@@ -77,12 +77,16 @@ func (n *Node) Digests(ctx context.Context, image string) ([]string, error) {
 	return out, nil
 }
 
+// Pull pulls the image by the same reference the workloads use (the tag), so the
+// node's tag (e.g. :latest) is moved to the new image and a later Pod with
+// IfNotPresent starts from it. digest is the remote digest that triggered the pull;
+// it only names the Pod so that a new digest gets a new pull.
 func (n *Node) Pull(ctx context.Context, image, digest string) error {
-	repo, err := repoOf(image)
+	parsed, err := name.ParseReference(image)
 	if err != nil {
-		return err
+		return fmt.Errorf("parse %q: %w", image, err)
 	}
-	ref := repo + "@" + digest
+	ref := parsed.Name()
 
 	list, err := n.Client.Resource(nodes).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -101,7 +105,7 @@ func (n *Node) Pull(ctx context.Context, image, digest string) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := n.pullOn(ctx, node.GetName(), ref); err != nil {
+			if err := n.pullOn(ctx, node.GetName(), ref, digest); err != nil {
 				mu.Lock()
 				errs = append(errs, fmt.Errorf("node %s: %w", node.GetName(), err))
 				mu.Unlock()
@@ -112,7 +116,7 @@ func (n *Node) Pull(ctx context.Context, image, digest string) error {
 	return errors.Join(errs...)
 }
 
-func (n *Node) pullOn(ctx context.Context, node, ref string) error {
+func (n *Node) pullOn(ctx context.Context, node, ref, digest string) error {
 	ns := n.PullNamespace
 	if ns == "" {
 		ns = "default"
@@ -121,7 +125,7 @@ func (n *Node) pullOn(ctx context.Context, node, ref string) error {
 	if timeout == 0 {
 		timeout = 2 * time.Minute
 	}
-	sum := sha256.Sum256([]byte(ref + "|" + node))
+	sum := sha256.Sum256([]byte(ref + "|" + digest + "|" + node))
 	podName := "pinner-pull-" + hex.EncodeToString(sum[:5])
 
 	spec := map[string]interface{}{
@@ -142,7 +146,7 @@ func (n *Node) pullOn(ctx context.Context, node, ref string) error {
 		"metadata": map[string]interface{}{
 			"name": podName, "namespace": ns,
 			"labels":      map[string]interface{}{"app.kubernetes.io/managed-by": "floatingtag-pinner"},
-			"annotations": map[string]interface{}{"floatingtag-pinner/image": ref, "floatingtag-pinner/node": node},
+			"annotations": map[string]interface{}{"floatingtag-pinner/image": ref, "floatingtag-pinner/digest": digest, "floatingtag-pinner/node": node},
 		},
 		"spec": spec,
 	}}

@@ -47,14 +47,14 @@ annotation で対象を指定したワークロード（Deployment / StatefulSet
 
 ## 第二段階: 反映
 
-差分を検知したら（ローカルキャッシュと、リソースが実際に使っている digest の食い違い。[README.md](./README.md) 参照）、spec の image に digest を書く。
+差分を検知したら（ローカルキャッシュの digest と、リソースの image 指定の食い違い。実行中の Pod / Revision の digest は見ない。[README.md](./README.md) 参照）、spec の image に digest を書く。
 
 - 書き方: `image: repo:latest@sha256:<新しい digest>`（kubelet は digest があるとタグを無視する。`latest` を残せば読みやすい）。
 - ksvc: image 変更で新しい Revision ができ、その digest で固定される。
 - Deployment: Pod テンプレートの変更でローリングが走り、全 Pod が同一 digest になる。
 - annotation にだけ digest を入れる案は、Deployment では **Pod ごとにずれるため不採用**
   （image 欄が `latest` のままのため）。
-- 書き込み要否の判断には、Pod の `imageID` / Revision の `imageDigest`（実際に古いか）との突き合わせを使う。
+- 書き込み要否は、spec の image 指定とローカルキャッシュの digest の比較で決める（Pod の `imageID` / Revision の `imageDigest` は見ない）。
 
 ## 第三段階: Argo CD との折り合い（第二段階の実運用前に必要）
 

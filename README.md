@@ -24,10 +24,11 @@
 | リモートレジストリ | タグ → digest の正本（Docker Hub など） | ○ | |
 | ローカルキャッシュ | Kubernetes が pull して各ノードに保持しているイメージ（containerd 等のイメージストア）。Harbor のようなレジストリを建てるものではない。同期先に任意のレジストリを使う形も将来は想定 | ○ | ○ |
 | Kubernetes リソース | 所定の annotation が付いた Deployment / StatefulSet / DaemonSet / Knative Service。参照元 | ○ | ○ |
-| コレクター | 第一段階: リソースからイメージを収集し、リモートレジストリとローカルキャッシュを比較、差分があれば pull。第二段階: ローカルキャッシュとリソースが使っている digest を比較し、差分を検知 | ○ | ○ |
+| コレクター | 第一段階: リソースからイメージを収集し、リモートレジストリとローカルキャッシュを比較、差分があれば pull。第二段階: リソースの image 指定とローカルキャッシュの digest を比較し、差分を検知 | ○ | ○ |
 | デプロイヤー | 検知した差分に対し適切な処置（spec の image に digest を書く等）を行う | | ○ |
 
-> 第二段階ではリモートレジストリとの直接のやり取りは行わない。ローカルキャッシュを基準に、リソースが実際に使っている digest（ksvc は Revision の `imageDigest`、Deployment などは Pod の `imageID`）との差分を検知し、デプロイヤーに渡す。
+> 第二段階ではリモートレジストリとの直接のやり取りは行わない。ローカルキャッシュを基準に、リソースの image 指定（spec の文字列）との差分を検知し、デプロイヤーに渡す。
+> 実行中の Pod / Revision が実際に使っている digest は見ない。
 
 ## 概要図
 
@@ -57,7 +58,7 @@ flowchart TB
 
     C -- "① 対象イメージを収集" --> K
     C -- "② ローカルの digest を取得" --> L
-    C -- "③ リソースが使っている<br/>digest を取得" --> K
+    C -- "③ リソースの image 指定と<br/>ローカルの digest を比較" --> K
     C -- "④ 差分を検知したら通知" --> D
     D -- "⑤ 適切な処置<br/>(image に digest を反映 等)" --> K
 ```
@@ -73,7 +74,7 @@ flowchart TB
    - 何も無い（初見）: `--on-new` に従う。`register` は pull、`ignore` は何もしない。
 
 digest を別に記録することはしない（正本はリモートのレジストリ、状態はローカルキャッシュ自身が持つ）。
-リソースで実際に動いている digest との突き合わせは、第二段階（デプロイヤー）で行う。
+リソースの image 指定との突き合わせは、第二段階で行う。
 
 ## 使い方（最小実装）
 
@@ -105,6 +106,7 @@ go run ./cmd/pinner run --interval 5m        # 常駐して繰り返す
   Pod のコマンドは存在しないものにしてあり、コンテナは動かない（pull だけが目的）。pull 完了後に Pod は削除する。
   必要な権限: Node の list、`--pull-namespace` での Pod の create / get / delete。
   ワークロードの spec は変更しない。
+- ローカルキャッシュの読み取りは、呼ぶたびに Node を取得し直す（再スキャン）。結果をキャッシュして高速化する形は、`Local` を包む形で後から付け替えられる（現状は再スキャンのみ）。
 - ノードの状態は `Node.status.images` から読む。kubelet の既定で1ノード最大50件、全ノードの和集合で判定する。
 
 ### 構成
@@ -125,8 +127,8 @@ Keel・Knative 本体・Argo CD Image Updater では、ksvc の `latest` 追従�
 ## 未決事項
 
 - annotation のキー名（IDEA.md では仮に `image-resolver/enabled: "true"`）。
+- 第二段階では、`@sha256:` で固定済みの image も収集対象に含める（現状の第一段階は除いている）。
 - 任意のレジストリを同期先にする `--local`（`registry`）。
 - pull 用 Pod の RBAC と実行用マニフェスト（Dockerfile、CronJob / Deployment）。
-- すでに動いているリソースを初めて対象にしたとき、実際に動いている digest が基準と食い違う場合の扱い（第二段階で突き合わせる）。
 - 実行形態の追加（CronJob 用のイメージ・マニフェスト、operator 化）。
 - Argo CD の `selfHeal` との折り合い（第二段階の実運用前に検討。IDEA.md 参照）。

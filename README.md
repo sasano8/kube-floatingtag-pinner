@@ -102,6 +102,11 @@ flowchart LR
   （`docker buildx imagetools inspect` で取得）で、**一致しない**。
   Revision 00005 / 00006 / 00007 は、それぞれ作成時点の `latest` の digest（`fdb79066…` / `f84b09ad…` / `4a45bcf8…`）で
   固定されており、Revision を作った時にだけ解決される挙動とも合う。
+- ノード側の確認: ノード `bootstrapoci` の `status.images` には `app-authorization-demo` が
+  `@sha256:4a45bcf8…`（Revision 00007）と `@sha256:f84b09ad…`（00006）の2件だけあり、
+  レジストリ上の最新 `bf16c8e0…` は**無い**。名前はどちらも digest 付きで、`:latest` のタグ名では載っていない
+  （Revision が digest で pull するため）。つまり最新のイメージはノードにも pull されていない。
+  ただし `status.images` は kubelet 既定で50件までなので、無いことの確証には `crictl images` 等での確認が要る。
 - 最新 digest の確認: `crane digest <image>:latest`、または `docker buildx imagetools inspect <image>:latest`。
   Revision 側は `kubectl get revision -o custom-columns=NAME:.metadata.name,CREATED:.metadata.creationTimestamp,DIGEST:.status.containerStatuses[0].imageDigest`。
 

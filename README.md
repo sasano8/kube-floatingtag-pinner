@@ -61,10 +61,46 @@ flowchart LR
 
 ## 動作の流れ（第一段階）
 
-1. コレクターが定期実行され、所定の annotation が付いたリソースを列挙する。
-2. Pod テンプレートの `containers[]` / `initContainers[]` からイメージを取り出し、重複を除く。
-3. ローカルレジストリに記録済みの digest と、リモートレジストリの現在の digest を比較する。
-4. 変わっていれば差分として検知し、ローカルレジストリを更新する（イメージ・参照元・前後の digest を残す）。
+1. コレクターが実行され、所定の annotation が付いたリソースを列挙し、使っているイメージ（タグ指定のもの）を集める。
+   リソースが実際に使っている digest は見ない。
+2. 各イメージについて、リモートレジストリの現在の digest を取得する（イメージ本体は落とさない）。
+3. ローカルレジストリ（基準として確定している digest）と比較する。
+   - 記録なし（初見）: `--on-new` に従う。`register` は基準として登録、`ignore` は何もしない。
+   - 一致: 変化なし。
+   - 不一致: 差分として検知し、ログに出して、ローカルレジストリを新しい digest に更新する。
+
+リソースで実際に動いている digest との突き合わせは、第二段階（デプロイヤー）で行う。
+
+## 使い方（最小実装）
+
+```sh
+# 対象にしたいリソースに annotation を付ける
+kubectl annotate deployment/myapp floatingtag-pinner/enabled=true
+
+go run ./cmd/pinner run --interval 5m        # 常駐して繰り返す
+go run ./cmd/pinner once                     # 1回だけ（ローカルレジストリがメモリのため差分は出ない）
+```
+
+| フラグ | 既定値 | 説明 |
+| --- | --- | --- |
+| `--on-new` | `register` | 記録が無いイメージの扱い: `register` / `ignore` |
+| `--interval` | `5m` | `run` の実行間隔 |
+| `--namespace` | 全て | 対象の名前空間 |
+| `--annotation` | `floatingtag-pinner/enabled` | 対象を示す annotation（値 `"true"`） |
+| `--kubeconfig` | in-cluster → `~/.kube/config` | |
+
+対象は Deployment / StatefulSet / DaemonSet / Knative Service。`@sha256:` で固定済みのイメージは除く。
+ローカルレジストリは現状メモリのみ（再起動で消える）。ConfigMap 等への差し替えは `store` を入れ替えるだけでよい。
+
+### 構成
+
+```
+cmd/pinner/          エントリポイント（once / run）
+internal/collector/  収集と比較のロジック（実行形態に依存しない。Source / Registry / Store の interface）
+internal/source/     Kubernetes リソースからイメージを集める
+internal/registry/   リモートレジストリの digest 取得（go-containerregistry）
+internal/store/      ローカルレジストリ（メモリ実装）
+```
 
 ## 既存ツールの対応状況
 
@@ -74,6 +110,7 @@ Keel・Knative 本体・Argo CD Image Updater では、ksvc の `latest` 追従�
 ## 未決事項
 
 - annotation のキー名（IDEA.md では仮に `image-resolver/enabled: "true"`）。
-- ローカルレジストリの実体（ConfigMap / CRD など）。
-- 実装形態（最小は CronJob + `crane` + `kubectl`、必要に応じてコントローラ化）。
+- ローカルレジストリの永続化（現状はメモリのみ。ConfigMap / CRD など。1 つの ConfigMap は約 1 MiB が上限）。
+- すでに動いているリソースを初めて対象にしたとき、実際に動いている digest が基準と食い違う場合の扱い（第二段階で突き合わせる）。
+- 実行形態の追加（CronJob 用のイメージ・マニフェスト、operator 化）。
 - Argo CD の `selfHeal` との折り合い（第二段階の実運用前に検討。IDEA.md 参照）。

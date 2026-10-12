@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -45,6 +46,7 @@ func main() {
 	namespace := fs.String("namespace", "", "namespace to watch (default: all)")
 	annotation := fs.String("annotation", source.DefaultAnnotation, "annotation that marks target resources")
 	onNew := fs.String("on-new", string(collector.OnNewRegister), "for images with no record: register|ignore")
+	floating := fs.String("floating-tags", "latest", "comma-separated tags to track; images with other tags are ignored (empty = all tags)")
 	localKind := fs.String("local", "node", "local registry: node (container runtime image store of the nodes)")
 	pullNS := fs.String("pull-namespace", "default", "namespace for the short-lived Pods that make nodes pull images")
 	pullSecret := fs.String("pull-secret", "", "imagePullSecret name (in --pull-namespace) for private registries")
@@ -73,7 +75,7 @@ func main() {
 		fatal(fmt.Errorf("unknown --local %q (supported: node)", *localKind))
 	}
 	c := &collector.Collector{
-		Source:   &source.Kube{Client: client, Namespace: *namespace, Annotation: *annotation},
+		Source:   &source.Kube{Client: client, Namespace: *namespace, Annotation: *annotation, FloatingTags: splitList(*floating)},
 		Registry: registry.Remote{},
 		Local:    loc,
 		OnNew:    policy,
@@ -141,4 +143,17 @@ func restConfig(path string) (*rest.Config, error) {
 	}
 	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
 		clientcmd.NewDefaultClientConfigLoadingRules(), nil).ClientConfig()
+}
+
+func splitList(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var out []string
+	for _, v := range strings.Split(s, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }

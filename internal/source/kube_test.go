@@ -42,15 +42,18 @@ func TestTargets(t *testing.T) {
 		gvr("serving.knative.dev", "services"): "ServiceList",
 	}
 	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, listKinds,
-		obj("apps/v1", "Deployment", "a", "web", true, "r/app:latest", "r/side@sha256:abc"),
+		obj("apps/v1", "Deployment", "a", "web", true, "r/app:latest", "r/side@sha256:abc", "r/fixed:v1.2.3", "r/untagged"),
 		obj("apps/v1", "Deployment", "a", "skip", false, "r/other:latest"),
 		obj("serving.knative.dev/v1", "Service", "b", "ksvc", true, "r/app:latest"),
 	)
-	got, err := (&source.Kube{Client: client}).Targets(context.Background())
+	got, err := (&source.Kube{Client: client, FloatingTags: []string{"latest"}}).Targets(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []collector.Target{{Image: "r/app:latest", Owners: []string{"a/Deployment/web", "b/Service/ksvc"}}}
+	want := []collector.Target{
+		{Image: "r/app:latest", Owners: []string{"a/Deployment/web", "b/Service/ksvc"}},
+		{Image: "r/untagged", Owners: []string{"a/Deployment/web"}}, // no tag = latest
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v want %+v", got, want)
 	}

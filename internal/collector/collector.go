@@ -32,8 +32,10 @@ var ErrPullNotImplemented = errors.New("pull is not implemented for this local")
 // (e.g. the container runtime image store of the nodes, or a registry we sync to).
 // It holds the images themselves; nothing is recorded separately.
 type Local interface {
-	// Digests lists the digests of the image's repository that are present locally.
-	Digests(ctx context.Context, image string) ([]string, error)
+	// TagDigests lists the digests the image's tag points to locally (one per
+	// distinct value, over the places that hold the tag). Empty = the tag is not
+	// held locally at all. Digests held without the tag are not reported.
+	TagDigests(ctx context.Context, image string) ([]string, error)
 	// Pull brings the image at the given digest into the local cache.
 	Pull(ctx context.Context, image, digest string) error
 }
@@ -60,10 +62,10 @@ func ParseOnNew(s string) (OnNew, error) {
 type Status string
 
 const (
-	StatusNew       Status = "new"       // local holds nothing of this repository; handled per OnNew
+	StatusNew       Status = "new"       // local does not hold the tag; handled per OnNew
 	StatusIgnored   Status = "ignored"   // new, and OnNew is ignore
-	StatusUnchanged Status = "unchanged" // local already holds the remote digest
-	StatusChanged   Status = "changed"   // local holds other digests, not the remote one
+	StatusUnchanged Status = "unchanged" // the local tag points to the remote digest
+	StatusChanged   Status = "changed"   // the local tag points elsewhere (stale)
 	StatusError     Status = "error"
 )
 
@@ -71,7 +73,7 @@ type Result struct {
 	Target
 	Status  Status
 	Remote  string   // digest on the remote registry
-	Local   []string // digests of the repository present locally
+	Local   []string // digests the tag points to locally
 	Pulled  bool
 	PullErr error // set when a pull was attempted and failed
 	Err     error
@@ -108,14 +110,14 @@ func (c *Collector) collect(ctx context.Context, t Target) Result {
 	}
 	r.Remote = remote
 
-	local, err := c.Local.Digests(ctx, t.Image)
+	local, err := c.Local.TagDigests(ctx, t.Image)
 	if err != nil {
 		return fail(fmt.Errorf("local digests: %w", err))
 	}
 	r.Local = local
 
 	switch {
-	case contains(local, remote):
+	case len(local) == 1 && local[0] == remote:
 		r.Status = StatusUnchanged
 		return r
 	case len(local) == 0:
@@ -134,13 +136,4 @@ func (c *Collector) collect(ctx context.Context, t Target) Result {
 	}
 	r.Pulled = true
 	return r
-}
-
-func contains(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }

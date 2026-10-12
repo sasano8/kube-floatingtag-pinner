@@ -39,11 +39,18 @@ type Node struct {
 	PullTimeout   time.Duration // per node (default 2m)
 }
 
-func (n *Node) Digests(ctx context.Context, image string) ([]string, error) {
-	repo, err := repoOf(image)
+// TagDigests returns the digests the image's tag points to on the nodes that hold
+// the tag. The node reports an image under several names (e.g. repo:latest and
+// repo@sha256:…); the tag's digest is the one sharing an entry with the tag name.
+// Digests held without the tag (e.g. pulled by digest) are ignored.
+func (n *Node) TagDigests(ctx context.Context, image string) ([]string, error) {
+	parsed, err := name.ParseReference(image)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse %q: %w", image, err)
 	}
+	tag := parsed.Name()
+	repo := parsed.Context().Name()
+
 	list, err := n.Client.Resource(nodes).List(ctx, metav1.ListOptions{})
 	if apierrors.IsNotFound(err) {
 		return nil, nil
@@ -57,13 +64,22 @@ func (n *Node) Digests(ctx context.Context, image string) ([]string, error) {
 		for _, img := range imgs {
 			m, _ := img.(map[string]interface{})
 			names, _ := m["names"].([]interface{})
+			hasTag := false
+			var digests []string
 			for _, nm := range names {
 				s, _ := nm.(string)
-				r, d, ok := strings.Cut(s, "@")
-				if !ok {
-					continue // tag-only name
+				if r, d, ok := strings.Cut(s, "@"); ok {
+					if nr, err := repoOf(r); err == nil && nr == repo {
+						digests = append(digests, d)
+					}
+					continue
 				}
-				if nr, err := repoOf(r); err == nil && nr == repo {
+				if ref, err := name.ParseReference(s); err == nil && ref.Name() == tag {
+					hasTag = true
+				}
+			}
+			if hasTag {
+				for _, d := range digests {
 					set[d] = struct{}{}
 				}
 			}

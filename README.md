@@ -65,13 +65,15 @@ flowchart TB
 
 ## 動作の流れ（第一段階）
 
-1. コレクターが実行され、所定の annotation が付いたリソースを列挙し、使っているイメージ（タグ指定のもの）を集める。
-   リソースが実際に使っている digest は見ない。
-2. 各イメージについて、リモートレジストリの現在の digest を取得する（イメージ本体は落とさない）。
-3. ローカルキャッシュ（各ノードのイメージストア）に、そのリポジトリの digest がどれあるかを調べて比較する。
-   - リモートの digest がある: 変化なし。
-   - 他の digest だけある: 差分として検知し、pull する。
-   - 何も無い（初見）: `--on-new` に従う。`register` は pull、`ignore` は何もしない。
+1. コレクターが実行され、所定の annotation が付いたリソースを列挙し、使っているイメージのうちフローティングタグ
+   （既定は `latest`。タグ無しも `latest` 扱い）のものを集める。固定タグ（`v1.2.3` など）と digest 指定は無視する。
+2. 各イメージについて、リモートレジストリでの、そのタグの現在の digest を取得する（イメージ本体は落とさない）。
+3. ローカルキャッシュ（各ノードのイメージストア）で、同じタグが指している digest を取得して比較する。
+   ノードに digest だけがあってタグが付いていないものは見ない（使われるときに勝手に pull されるため）。
+   - ローカルのタグがリモートの digest を指している: 変化なし。
+   - ローカルのタグが他の digest を指している（ノードごとに食い違う場合を含む）: 差分として検知し、
+     リモートのタグを正としてローカルキャッシュを同期する（タグ指定で pull）。
+   - ローカルがそのタグを持っていない（初見）: `--on-new` に従う。`register` は pull、`ignore` は何もしない。
 
 digest を別に記録することはしない（正本はリモートのレジストリ、状態はローカルキャッシュ自身が持つ）。
 実行中の Pod との突き合わせと再デプロイは、第二段階で行う。
@@ -89,6 +91,7 @@ go run ./cmd/pinner run --interval 5m        # 常駐して繰り返す
 | フラグ | 既定値 | 説明 |
 | --- | --- | --- |
 | `--local` | `node` | ローカルキャッシュの種類。現状は `node`（ノードのイメージストア）のみ |
+| `--floating-tags` | `latest` | 追う（フローティング）タグ。カンマ区切り。これ以外のタグは固定とみなして無視。空なら全タグ |
 | `--on-new` | `register` | ローカルに何も無いイメージの扱い: `register`（pull）/ `ignore` |
 | `--pull-namespace` | `default` | pull 用 Pod を作る名前空間 |
 | `--pull-secret` | なし | 非公開レジストリ用の imagePullSecret 名（`--pull-namespace` 内） |
@@ -98,7 +101,7 @@ go run ./cmd/pinner run --interval 5m        # 常駐して繰り返す
 | `--annotation` | `floatingtag-pinner/enabled` | 対象を示す annotation（値 `"true"`） |
 | `--kubeconfig` | in-cluster → `~/.kube/config` | |
 
-対象は Deployment / StatefulSet / DaemonSet / Knative Service。`@sha256:` で固定済みのイメージは除く。
+対象は Deployment / StatefulSet / DaemonSet / Knative Service。`--floating-tags` 以外のタグと、`@sha256:` で固定済みのイメージは除く。
 
 現状の制約:
 

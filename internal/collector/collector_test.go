@@ -28,7 +28,7 @@ type fakeLocal struct {
 	pulledDig []string
 }
 
-func (f *fakeLocal) Digests(context.Context, string) ([]string, error) { return f.have, nil }
+func (f *fakeLocal) TagDigests(context.Context, string) ([]string, error) { return f.have, nil }
 func (f *fakeLocal) Pull(_ context.Context, _, digest string) error {
 	if f.pullErr != nil {
 		return f.pullErr
@@ -55,7 +55,7 @@ func run(t *testing.T, loc *fakeLocal, onNew collector.OnNew) collector.Result {
 }
 
 func TestUnchanged(t *testing.T) {
-	loc := &fakeLocal{have: []string{"sha256:a", "sha256:b"}}
+	loc := &fakeLocal{have: []string{"sha256:b"}}
 	if r := run(t, loc, collector.OnNewRegister); r.Status != collector.StatusUnchanged || len(loc.pulledDig) != 0 {
 		t.Fatalf("%+v %v", r, loc.pulledDig)
 	}
@@ -87,6 +87,14 @@ func TestPullNotImplementedIsReported(t *testing.T) {
 	loc := &fakeLocal{have: []string{"sha256:a"}, pullErr: collector.ErrPullNotImplemented}
 	r := run(t, loc, collector.OnNewRegister)
 	if r.Status != collector.StatusChanged || r.Pulled || !errors.Is(r.PullErr, collector.ErrPullNotImplemented) {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// The tag differs between nodes: some already at the remote digest, some stale.
+func TestTagDivergedAcrossNodesIsChanged(t *testing.T) {
+	loc := &fakeLocal{have: []string{"sha256:a", "sha256:b"}}
+	if r := run(t, loc, collector.OnNewRegister); r.Status != collector.StatusChanged || !r.Pulled {
 		t.Fatalf("%+v", r)
 	}
 }

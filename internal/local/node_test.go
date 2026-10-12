@@ -34,26 +34,32 @@ func node(name string, names ...[]string) *unstructured.Unstructured {
 	}}
 }
 
-func TestDigests(t *testing.T) {
+func TestTagDigests(t *testing.T) {
 	gvr := schema.GroupVersionResource{Version: "v1", Resource: "nodes"}
 	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
 		map[schema.GroupVersionResource]string{gvr: "NodeList"},
 		node("n1",
 			[]string{"ghcr.io/o/app@sha256:aaa", "ghcr.io/o/app:latest"},
-			[]string{"ghcr.io/o/other@sha256:zzz"}),
+			[]string{"ghcr.io/o/other@sha256:zzz", "ghcr.io/o/other:latest"}),
 		node("n2",
+			// pulled by digest only (e.g. by Knative): the tag is not here
 			[]string{"ghcr.io/o/app@sha256:bbb"},
-			[]string{"docker.io/library/busybox@sha256:ccc"}),
+			[]string{"docker.io/library/busybox@sha256:ccc", "docker.io/library/busybox:latest"}),
+		node("n3", []string{"ghcr.io/o/app@sha256:ddd", "ghcr.io/o/app:v1"}),
 	)
 	n := &local.Node{Client: client}
 
-	got, err := n.Digests(context.Background(), "ghcr.io/o/app:latest")
-	if err != nil || !reflect.DeepEqual(got, []string{"sha256:aaa", "sha256:bbb"}) {
-		t.Fatalf("got %v err %v", got, err)
+	got, err := n.TagDigests(context.Background(), "ghcr.io/o/app:latest")
+	if err != nil || !reflect.DeepEqual(got, []string{"sha256:aaa"}) {
+		t.Fatalf("got %v err %v (digest-only and other-tag entries must be ignored)", got, err)
 	}
 	// docker hub names are normalized, so "busybox" matches "docker.io/library/busybox"
-	got, _ = n.Digests(context.Background(), "busybox:latest")
+	got, _ = n.TagDigests(context.Background(), "busybox")
 	if !reflect.DeepEqual(got, []string{"sha256:ccc"}) {
+		t.Fatalf("got %v", got)
+	}
+	got, _ = n.TagDigests(context.Background(), "ghcr.io/o/app:nothere")
+	if len(got) != 0 {
 		t.Fatalf("got %v", got)
 	}
 }

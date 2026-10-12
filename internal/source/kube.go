@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/google/go-containerregistry/pkg/name"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -38,6 +39,11 @@ type Kube struct {
 	Client     dynamic.Interface
 	Namespace  string // "" = all namespaces
 	Annotation string // "" = DefaultAnnotation
+
+	// FloatingTags are the tags to track (e.g. "latest"). Images with any other tag
+	// are treated as fixed and ignored. nil = track every tag. An image without a
+	// tag counts as "latest".
+	FloatingTags []string
 }
 
 func (k *Kube) Targets(ctx context.Context) ([]collector.Target, error) {
@@ -61,6 +67,9 @@ func (k *Kube) Targets(ctx context.Context) ([]collector.Target, error) {
 			}
 			owner := fmt.Sprintf("%s/%s/%s", obj.GetNamespace(), obj.GetKind(), obj.GetName())
 			for _, img := range images(obj, kd.podSpec) {
+				if !k.floating(img) {
+					continue
+				}
 				owners[img] = append(owners[img], owner)
 			}
 		}
@@ -72,6 +81,26 @@ func (k *Kube) Targets(ctx context.Context) ([]collector.Target, error) {
 	}
 	sort.Slice(targets, func(i, j int) bool { return targets[i].Image < targets[j].Image })
 	return targets, nil
+}
+
+func (k *Kube) floating(image string) bool {
+	if k.FloatingTags == nil {
+		return true
+	}
+	ref, err := name.ParseReference(image)
+	if err != nil {
+		return false
+	}
+	tag, ok := ref.(name.Tag)
+	if !ok {
+		return false
+	}
+	for _, t := range k.FloatingTags {
+		if t == tag.TagStr() {
+			return true
+		}
+	}
+	return false
 }
 
 // images returns the tag-referenced images of containers and initContainers.

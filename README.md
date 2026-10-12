@@ -127,7 +127,8 @@ Keel・Knative 本体・Argo CD Image Updater では、ksvc の `latest` 追従�
 ## 未決事項
 
 - annotation のキー名（IDEA.md では仮に `image-resolver/enabled: "true"`）。
-- 第二段階では、`@sha256:` で固定済みの image も収集対象に含める（現状の第一段階は除いている）。
+- 第二段階では、`repo:tag@sha256:…`（タグ付きで固定した image。第二段階でこのツール自身が書く形）を収集対象に残す。
+  タグが新しい digest を指したら、固定先を更新するため。`repo@sha256:…`（タグ無し）は対象外のまま。現状は `@` を含むものをすべて除いている。
 - 任意のレジストリを同期先にする `--local`（`registry`）。
 - pull 用 Pod の RBAC と実行用マニフェスト（Dockerfile、CronJob / Deployment）。
 - 実行形態の追加（CronJob 用のイメージ・マニフェスト、operator 化）。

@@ -130,7 +130,7 @@ go run ./cmd/pinner --daemon --interval 5m   # 常駐して繰り返す
 ### 構成
 
 ```
-cmd/pinner/          エントリポイント（once / run）
+cmd/pinner/          エントリポイント（既定は1回実行、--daemon で常駐）
 internal/collector/  収集と比較のロジック（実行形態に依存しない。Source / Registry / Local の interface）
 internal/source/     Kubernetes リソースからイメージを集める
 internal/registry/   リモートレジストリの digest 取得（go-containerregistry）

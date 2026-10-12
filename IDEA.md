@@ -39,7 +39,7 @@ annotation で対象を指定したワークロード（Deployment / StatefulSet
 ## 第一段階の残課題
 
 実装済みの範囲は [README.md](./README.md) を参照（収集、リモートの digest 取得、ローカルキャッシュ（ノードのイメージストア）との比較、
-差分時の pull、ログ出力、`once` / `run`）。残っているのは次の点。
+差分時の pull、ログ出力、1回実行と `--daemon`）。残っているのは次の点。
 
 - 実機での確認: pull 用 Pod（存在しないコマンドで kubelet に pull だけさせる）が、使っているランタイムで期待どおり動くか。
 - レジストリ認証（非公開レジストリ）と、rate limit（Docker Hub の匿名アクセスの上限）の確認。

@@ -131,6 +131,32 @@ expect 'msg="trigger match"'
 expect_not 'msg="trigger mismatch"'
 expect_not 'action requested'
 
+step "the remote's tag moves again (v3); pull it"
+push_image v3
+run_pinner pull || fail "pull exited non-zero"
+expect 'msg="pull match".*via=pulling'
+
+step "trigger --dry-run with on-mismatch=delete-pods: says what it would do, deletes nothing"
+kubectl -n "$NS" annotate --overwrite deployment app floatingtag-pinner/on-mismatch=delete-pods
+old_pod=$(kubectl -n "$NS" get pods -o jsonpath='{.items[0].metadata.name}')
+run_pinner trigger --dry-run || fail "trigger --dry-run exited non-zero"
+expect 'dry-run: would run action.*action=delete-pods'
+kubectl -n "$NS" get pod "$old_pod" >/dev/null || fail "a dry run must not delete the Pod"
+
+step "trigger with on-mismatch=delete-pods: the differing Pod is deleted, the Deployment is untouched"
+gen_before=$(kubectl -n "$NS" get deployment app -o jsonpath='{.metadata.generation}')
+run_pinner trigger || fail "trigger exited non-zero"
+expect 'trigger action requested.*action=delete-pods'
+kubectl -n "$NS" wait --for=delete "pod/${old_pod}" --timeout=120s
+kubectl -n "$NS" rollout status deployment/app --timeout=180s
+[ "$(kubectl -n "$NS" get deployment app -o jsonpath='{.metadata.generation}')" = "$gen_before" ] ||
+  fail "delete-pods must not change the Deployment"
+
+step "trigger again: the new Pod runs the local digest -> match"
+run_pinner trigger || fail "trigger exited non-zero"
+expect 'msg="trigger match"'
+expect_not 'msg="trigger mismatch"'
+
 step "log options"
 run_pinner pull --log-level=warn || fail "pull exited non-zero"
 expect_not 'msg="pull match"' # INFO is hidden

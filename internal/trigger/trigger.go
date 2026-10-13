@@ -32,6 +32,7 @@ type Running struct {
 	Digest string
 	Node   string
 	Pod    string
+	UID    string // the Pod's UID, so that an action can tell it from a Pod that replaced it
 }
 
 type RunningReader interface {

@@ -148,7 +148,7 @@ func setupTrigger(args []string) job {
 		Local:   newLocal(*c.localKind, &local.Node{Client: client}),
 		Running: &source.KubeRunning{Client: client},
 	}
-	actor := trigger.NewActor(trigger.None{}, action.Rollout{Client: client})
+	actor := trigger.NewActor(trigger.None{}, action.Rollout{Client: client}, action.DeletePods{Client: client})
 	actor.DryRun = *c.dryRun
 	actor.MaxActions = *maxActions
 	return job{pass: func(ctx context.Context) bool { return triggerPass(ctx, det, actor, rep) }, daemon: *c.daemon, interval: *c.interval}

@@ -57,7 +57,7 @@ func (k *KubeRunning) pods(ctx context.Context, r trigger.Resource, want string)
 				continue
 			}
 			if d := digestOf(m["imageID"]); d != "" {
-				out = append(out, trigger.Running{Digest: d, Node: node, Pod: pod.GetName()})
+				out = append(out, trigger.Running{Digest: d, Node: node, Pod: pod.GetName(), UID: string(pod.GetUID())})
 			}
 		}
 	}

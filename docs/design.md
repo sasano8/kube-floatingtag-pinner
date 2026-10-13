@@ -178,7 +178,7 @@ cmd/pinner  ──▶  internal/collector（収集と比較のロジック）
   1 回実行では、どれか 1 つでも失敗があれば終了コードは非 0。
 - リモートの digest は `remote.Head` で取る（イメージ本体は落とさない）。
 
-## 8. 第二段階の設計 [検知、`none`、`rollout` は実装済み。`delete-pods` は未実装]
+## 8. 第二段階の設計 [検知、`none`、`rollout`、`delete-pods` は実装済み。`sync` は未実装]
 
 ### 比較
 
@@ -194,10 +194,10 @@ Pod から取るのは「タグ」と「digest」の両方。タグはどのロ�
 - 検知（`internal/trigger` の `Detector`）: 実装済み。リソースの収集（`source.Kube.Resources`）、
   ノードごとのローカルのタグの digest（`local.Node.NodeTagDigests`）、実行中の digest（`source.KubeRunning`）を比べる。
   Pod はそのノードのタグと、Revision はローカル全体のタグと比べる。結果は `match` / `mismatch` / `not-pulled` / `not-running` / `error`。
-- アクター（`Actor`）とアクション: `none`（既定）と `rollout` が実装済み（`internal/action`）。アクション名が未実装のときは、エラーにする。
+- アクター（`Actor`）とアクション: `none`（既定）、`rollout`、`delete-pods` が実装済み（`internal/action`）。アクション名が未実装のときは、エラーにする。
   同じ状態への繰り返しの回避と、`--max-actions` も `Actor` にある（下の「アクター」の節）。
 - `trigger --dry-run`: 実装済み。アクションを実行せず、どのアクションが実行されるはずだったかをログに出す。
-- 未実装: `delete-pods`、`sync`（pull → trigger）。
+- 未実装: `sync`（pull → trigger）。
 - 実機では未確認。
 
 ### ログ（状態とログレベル）
@@ -270,7 +270,7 @@ Pod から取るのは「タグ」と「digest」の両方。タグはどのロ�
 | --- | --- | --- | --- | --- |
 | `none`（既定） | 実装済み | すべて | 何もしない（見つけたことは、ログに出る） | 無し |
 | `rollout` | 実装済み・実機は未確認 | Deployment / StatefulSet / DaemonSet / Knative Service | Pod テンプレートに annotation を足して、新しい世代を出す | annotation を 1 つ足す |
-| `delete-pods` | 未実装 | Deployment / StatefulSet / DaemonSet | ローカルと違う Pod を削除する（ReplicaSet 等が作り直す） | 無し |
+| `delete-pods` | 実装済み・実機は未確認 | Deployment / StatefulSet / DaemonSet | `mismatch` だった Pod だけを削除する（ReplicaSet 等が作り直す） | 無し |
 
 **アクションは「意図」で名付け、種類ごとの違いは、対象の処理に持たせる。**
 Deployment 等の「ローリング更新」と、Knative の「新しい Revision」は、どちらもテンプレートの annotation を 1 つ変える同じ操作
@@ -283,6 +283,17 @@ Deployment 等の「ローリング更新」と、Knative の「新しい Revisi
   同じ resource の 2 つの finding（たとえば 2 つの image）が同じ秒に patch しても、同じ値なので、2 回目は何も変えず、rollout は 1 回で済む。
 - field manager は `floatingtag-pinner`。誰が変えたかが、`managedFields` で分かる。
 - 実装は `internal/action`。`kind → API resource` の対応は、`source` と共通（`source.ResourceFor`）。
+
+**`delete-pods` の設計**
+
+- 削除するのは、`mismatch` の finding が名指しした Pod だけ（`Finding.Mismatches[].Pod`）。揃っている Pod には触れない。リソース（Deployment 等）には触れない。
+- **UID を条件に削除する**: 検知してから削除するまでの間に、その Pod がすでに入れ替わっていたら（StatefulSet は名前が同じ）、新しい Pod を消さない。
+  条件に合わない（Conflict）、または、すでに無い（NotFound）は、目的が済んでいるので、エラーにしない。そのため、`trigger.Running` が Pod の UID を持つ。
+- Knative には対応しない。Revision の Pod は、解決済みの digest で固定されていて、消しても同じものが作り直されるだけ。
+- **`mismatch` にだけ結び付けられる**（`StateAware`）。`not-pulled` や `error` では、削除する Pod を名指しできないため、`on-not-pulled=delete-pods` はエラーにする。
+- **まとめて削除する**: 違う Pod を一度に消すので、一時的に Pod が足りなくなることがある。Eviction API（PodDisruptionBudget を尊重する）や、
+  1 つずつ消す方式は採らなかった。開発環境向けで、単純さを取った。同じ状態は 1 回しか依頼しないので（下の「アクター」）、
+  「1 回の実行で 1 つずつ」にすると、残りの Pod が入れ替わらなくなる。段階的に入れ替えたいときは、`rollout`（ローリング更新）を使う。
 
 ### アクター（繰り返しの回避と上限）
 

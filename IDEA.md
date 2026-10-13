@@ -56,7 +56,7 @@ kubelet / Knative に新しいイメージを取り直させる。リモート�
 - 操作（種類ごと）:
   - `rollout`（実装済み）: Deployment / StatefulSet / DaemonSet / Knative Service の Pod テンプレートに annotation を足して、新しい世代を出す
     （Knative では新しい Revision。タグはそのときに解決し直される）。
-  - `delete-pods`（未実装）: Deployment / StatefulSet / DaemonSet の、ローカルと違う Pod を削除する（spec を触らない）。
+  - `delete-pods`（実装済み）: Deployment / StatefulSet / DaemonSet の、`mismatch` だった Pod を削除する（spec を触らない）。
     Knative は対象外（Pod を消しても同じ digest で作り直されるだけ。Revision は不変）。
 - どの操作をするかは「アクション」として切り離し、状態ごとに annotation で指定する（`floatingtag-pinner/on-mismatch: none | rollout | delete-pods`。
   `on-not-pulled` は任意）。既定は `none`（何もしない）。見つけたことは、アクションと別に、常にログに出る（`--log-level`、`--log-states`）。

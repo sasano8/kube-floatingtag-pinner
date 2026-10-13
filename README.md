@@ -109,16 +109,19 @@ digest を別に記録することはしない（正本はリモートのレジ�
 
 - **ログ**: 見つけたことは、アクションと関係なく、常にすべて報告する。出す範囲は実行時のオプションで絞る（下の「ログ」）。
 - **アクション**: リソースに何かをするもの。リソースの annotation で、状態ごとに指定する。**既定は `none`（何もしない）**。
-  現状のアクションは `none`（既定）と `rollout`。`delete-pods` は未実装（指定するとエラーになる）。
+  現状のアクションは `none`（既定）、`rollout`、`delete-pods`。
 
 | アクション | 対象 | 操作 |
 | --- | --- | --- |
 | `none`（既定） | すべて | 何もしない（見つけたことは、ログに出る） |
 | `rollout` | Deployment / StatefulSet / DaemonSet / Knative Service | Pod テンプレート（`spec.template.metadata.annotations`）に `floatingtag-pinner/restartedAt: <時刻>` を足して、新しい世代を出す。Deployment 等ではローリング更新、Knative では新しい Revision（作成時にタグが解決し直される）。**image は変更しない** |
-| `delete-pods`（未実装） | Deployment / StatefulSet / DaemonSet | ローカルと違う Pod を削除する。Knative は対象外（Pod を消しても、Revision が固定した同じ digest で作り直されるだけ） |
+| `delete-pods` | Deployment / StatefulSet / DaemonSet | `mismatch` だった Pod だけを削除する（ReplicaSet 等が作り直し、ローカルのイメージで起動する）。リソース自体には触れない。Knative は対象外（Pod を消しても、Revision が固定した同じ digest で作り直されるだけ）。`on-mismatch` にだけ指定できる |
 
 `rollout` の変更は、field manager `floatingtag-pinner` として記録される（誰が変えたかが、`managedFields` で分かる）。
-必要な権限: 対象リソース（`deployments`、`statefulsets`、`daemonsets`、Knative の `services`）の `patch`。
+必要な権限: `rollout` は対象リソース（`deployments`、`statefulsets`、`daemonsets`、Knative の `services`）の `patch`、`delete-pods` は `pods` の `delete`。
+
+`delete-pods` は、違う Pod を**まとめて**削除する（UID を条件にするので、すでに入れ替わった Pod は消さない）。一時的に Pod が足りなくなることがある。
+段階的に入れ替えたいときは `rollout`（ローリング更新の strategy に従う）を使う。
 
 例: `kubectl annotate deployment/myapp floatingtag-pinner/on-mismatch=rollout`
 
@@ -266,5 +269,5 @@ Keel・Knative 本体・Argo CD Image Updater では、ksvc の `latest` 追従�
 ## 未決事項
 
 - コマンド名（`pull` / `trigger`）は決定。両方を続けて行う `sync` は仮。
-- 第二段階のアクション `delete-pods`、`sync`。
+- `sync`（`pull` → `trigger`）。
 - 任意のレジストリを同期先にする `--local`（`registry`）。

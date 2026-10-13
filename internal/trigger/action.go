@@ -24,6 +24,12 @@ type Action interface {
 	Do(ctx context.Context, f Finding) error
 }
 
+// StateAware is implemented by an action that only makes sense for some states
+// (e.g. delete-pods acts on the Pods that differ, so only on mismatch).
+type StateAware interface {
+	States() []Status
+}
+
 // None does nothing to the resource. Findings are reported by internal/report regardless.
 type None struct{}
 
@@ -66,6 +72,9 @@ func (a *Actor) Act(ctx context.Context, f Finding) error {
 	}
 	if !ac.Supports(f.Kind) {
 		return fmt.Errorf("%s: action %q does not support %s", f.Resource, name, f.Kind)
+	}
+	if sa, ok := ac.(StateAware); ok && !containsStatus(sa.States(), f.Status) {
+		return fmt.Errorf("%s: action %q cannot be bound to %s", f.Resource, name, f.Status)
 	}
 	if name != DefaultAction {
 		// The same action for the same local state is asked for once. After a rollout the resource may
@@ -113,4 +122,13 @@ func (a *Actor) names() string {
 	}
 	sort.Strings(n)
 	return strings.Join(n, ", ")
+}
+
+func containsStatus(list []Status, s Status) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }

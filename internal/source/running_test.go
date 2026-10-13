@@ -17,7 +17,7 @@ import (
 func pod(name, node string, labels map[string]interface{}, image, imageID string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "v1", "kind": "Pod",
-		"metadata": map[string]interface{}{"namespace": "ns", "name": name, "labels": labels},
+		"metadata": map[string]interface{}{"namespace": "ns", "name": name, "uid": "uid-" + name, "labels": labels},
 		"spec":     map[string]interface{}{"nodeName": node},
 		"status": map[string]interface{}{"containerStatuses": []interface{}{
 			map[string]interface{}{"name": "c", "image": image, "imageID": imageID}}},
@@ -53,8 +53,8 @@ func TestRunningPods(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []trigger.Running{
-		{Digest: "sha256:aaa", Node: "n1", Pod: "web-1"},
-		{Digest: "sha256:bbb", Node: "n2", Pod: "web-2"},
+		{Digest: "sha256:aaa", Node: "n1", Pod: "web-1", UID: "uid-web-1"},
+		{Digest: "sha256:bbb", Node: "n2", Pod: "web-2", UID: "uid-web-2"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v want %+v", got, want)

@@ -370,7 +370,7 @@ Knative は、Revision を作ると、そのときリモートに問い合わせ
 - **公開**（`.github/workflows/docs.yml`）: MkDocs（Material）で、README と `docs/` を静的サイトにして、GitHub Pages に出す。
   README は `docs/` の外にあるので、`scripts/prepare-docs-site.sh` が、`.site-src/`（コミットしない）に、README をホームにした入力を作り、
   サイトで解決できないリンクを、リポジトリの URL に直す。`docs/` 自体は書き換えない。
-  **スキップが既定**（変数 `PUBLISH_DOCS` か手動で実行）。Pages は public のリポジトリが要るため。
+  `main` への push で、自動で公開する（変数でのスキップはしない）。事前に、Pages を有効にしておく必要がある（Settings → Pages → Source: GitHub Actions。public のリポジトリが要る）。
 
 ## テストの層
 

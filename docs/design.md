@@ -298,6 +298,19 @@ selfHeal が差分として戻さないか。戻すなら `ignoreDifferences` �
 - クラスタの中で動かす構成（CronJob / Deployment、RBAC、operator 化）は、いまは考えない。手元から `kubeconfig` で動かす前提。
 - pull 用 Pod の同時実行数の制限や、ワークロードが動いているノードだけを対象にすること（[research.md](./research.md) の rate limit の節）。
 
+## テストの層
+
+| 層 | 内容 | このプロジェクト |
+| --- | --- | --- |
+| 単体 | Kubernetes のクライアントを fake に差し替える | 実装済み。CI で実行 |
+| envtest | 本物の `kube-apiserver` と `etcd` だけを起動する（kubelet もノードも無い） | 使わない。pull 用 Pod、`Node.status.images` は kubelet が無いと確かめられないため |
+| e2e | kind（本物の kubelet と containerd）と、CI の中のローカルレジストリ | `test/e2e/run.sh` と `.github/workflows/e2e.yml`。**スキップが既定**（変数 `RUN_E2E` か手動で実行）。未実行 |
+
+- e2e はローカルレジストリを使う: 同じタグに別の内容を 2 回 push すれば「リモートのタグが動いた」状況を作れる。rate limit、認証の影響も受けない。
+  kind のノードの containerd に、`localhost:5001` をローカルレジストリへ向ける設定を入れる（kind の公式の手順）。
+- ノードの `status.images` の更新の遅れ（pull 後の読み直しを繰り返す理由）は、kind でも再現される。e2e が、その確認になる。
+- Knative（Revision の `imageDigest`）は、Knative Serving のインストールが重いので、e2e の対象外。単体テストのみ。
+
 ## 10. 実機で確認が必要な前提 [未確認]
 
 実機では、第一段階のコード全体が未確認。特に次の点を見る。

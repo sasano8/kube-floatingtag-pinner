@@ -30,7 +30,7 @@ README の概要では触れていない、詳細寄りの設計と、**なぜ�
 
 - **pull するのは kubelet**で、このツールはイメージ本体を落とさない（リモートへは digest の問い合わせだけ）。
   「ローカルを最新にする」と「リソースに取り直させる」は、別の操作で、失敗のしかたも違う。分けておくと、片方だけ動かせる。
-- 第一段階はワークロードに一切触れない。**読み取りと pull だけ**なので、Argo CD などとも衝突しない。
+- 第一段階はワークロードに一切触れない。**読み取りと pull だけ**。
   危険度の高い第二段階（アクションの実行）は、後から足せる独立した層にしておく。
 - 第二段階がリモートを見ないのは、第一段階でローカルが最新になっているという前提に立つため。
   この前提のおかげで、第二段階の比較は「ローカルの中の値」と「動いているものの値」だけで閉じる。
@@ -281,7 +281,7 @@ Deployment 等の「ローリング更新」と、Knative の「新しい Revisi
 - annotation の key は `floatingtag-pinner/restartedAt`（値は UTC の時刻、秒単位）。`kubectl rollout restart` の
   `kubectl.kubernetes.io/restartedAt` とは別にして、kubectl との衝突を避ける。
   同じ resource の 2 つの finding（たとえば 2 つの image）が同じ秒に patch しても、同じ値なので、2 回目は何も変えず、rollout は 1 回で済む。
-- field manager は `floatingtag-pinner`。managedFields に残るので、Argo CD の `ignoreDifferences`（`managedFieldsManagers`）で無視できる。
+- field manager は `floatingtag-pinner`。誰が変えたかが、`managedFields` で分かる。
 - 実装は `internal/action`。`kind → API resource` の対応は、`source` と共通（`source.ResourceFor`）。
 
 ### アクター（繰り返しの回避と上限）
@@ -307,11 +307,6 @@ Knative は、Revision を作ると、そのときリモートに問い合わせ
 - Kyverno / OPA のポリシー（タグ必須、署名検証）に弾かれうる。
 
 （digest とタグを併記した `repo:latest@sha256:…` では、kubelet は digest を使いタグは無視する、と理解している [未確認]。）
-
-### Argo CD との関係 [未確認]
-
-image を書き換えないので衝突は大きく減る。確認が要るのは、テンプレートへの annotation（`restartedAt`、ksvc の template annotation）を、
-selfHeal が差分として戻さないか。戻すなら `ignoreDifferences` を使う。Pod の削除は spec を変えないので影響しない見込み。
 
 ## 9. 検討中のこと
 

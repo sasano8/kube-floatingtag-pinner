@@ -75,14 +75,6 @@ kubelet / Knative に新しいイメージを取り直させる。リモート�
 - Kyverno / OPA のポリシー（タグ必須、署名検証）に弾かれうる。
 - Knative で、`latest@sha256:…` への書き換えが期待どおり新 Revision を作るか未確認。
 
-## 第三段階: Argo CD との折り合い（第二段階の実運用前に確認）
-
-image を書き換えないので、selfHeal との衝突は大きく減る。ただし次を確認する。
-
-- Pod の削除は spec を変えないので影響しない見込み。
-- テンプレートへの annotation（`restartedAt` や ksvc の template annotation）を、Argo CD が差分として戻さないか。
-  戻す場合は `ignoreDifferences` を使う。
-
 ## 未確認事項
 
 - 調査結果は [docs/research.md](./docs/research.md) に移した（Keel は ksvc に使えない見込み、Knative 本体は `latest` に追従しない、rate limit、Revision の削除）。

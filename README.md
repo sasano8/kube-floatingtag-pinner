@@ -117,7 +117,7 @@ digest を別に記録することはしない（正本はリモートのレジ�
 | `rollout` | Deployment / StatefulSet / DaemonSet / Knative Service | Pod テンプレート（`spec.template.metadata.annotations`）に `floatingtag-pinner/restartedAt: <時刻>` を足して、新しい世代を出す。Deployment 等ではローリング更新、Knative では新しい Revision（作成時にタグが解決し直される）。**image は変更しない** |
 | `delete-pods`（未実装） | Deployment / StatefulSet / DaemonSet | ローカルと違う Pod を削除する。Knative は対象外（Pod を消しても、Revision が固定した同じ digest で作り直されるだけ） |
 
-`rollout` の変更は、field manager `floatingtag-pinner` として記録される（Argo CD の `ignoreDifferences` で、この管理者の変更を無視する設定にしやすい）。
+`rollout` の変更は、field manager `floatingtag-pinner` として記録される（誰が変えたかが、`managedFields` で分かる）。
 必要な権限: 対象リソース（`deployments`、`statefulsets`、`daemonsets`、Knative の `services`）の `patch`。
 
 例: `kubectl annotate deployment/myapp floatingtag-pinner/on-mismatch=rollout`
@@ -268,4 +268,3 @@ Keel・Knative 本体・Argo CD Image Updater では、ksvc の `latest` 追従�
 - コマンド名（`pull` / `trigger`）は決定。両方を続けて行う `sync` は仮。
 - 第二段階のアクション `delete-pods`、`sync`。
 - 任意のレジストリを同期先にする `--local`（`registry`）。
-- Argo CD の `selfHeal` との折り合い（第二段階の実運用前に確認。[docs/design.md](./docs/design.md) 参照）。

@@ -326,6 +326,8 @@ app-authorization-demo/Service/app-authorization-demo  ghcr.io/sasano8/app-autho
 | `--log-level` | ログレベルの下限（`debug` / `info` / `warn` / `error`） | `info` |
 | `--log-states` | ログに出す状態（カンマ区切り。例: `mismatch,not-pulled,error`）。そのコマンドが出さない状態を指定するとエラー | すべて |
 
+ログの digest は、先頭の 12 文字と `...` に省略して出す（`sha256:bf16c8e06762...`）。`--digest-length N` で文字数を変えられる（`0` で全部）。
+
 `--daemon` で `match` が毎回出てうるさいときは、`--log-level=warn` か `--log-states=mismatch,not-pulled,error` で絞れる。
 
 ログの行は、報告した段階の接頭辞（`pull` / `trigger`）で始まる（`pull mismatch`、`trigger match` など）。
@@ -346,14 +348,14 @@ app-authorization-demo/Service/app-authorization-demo  ghcr.io/sasano8/app-autho
 `pull` の出力は、イメージごとに 1 行のログ（次は形式の例。実クラスタで取った出力ではない）。
 
 ```
-level=INFO msg="pull match" image=ghcr.io/sasano8/app-authorization-demo:latest owners=[tutorial/Deployment/web] remote=sha256:bf16c8e0… local=[sha256:bf16c8e0…]
+level=INFO msg="pull match" image=ghcr.io/sasano8/app-authorization-demo:latest owners=[tutorial/Deployment/web] remote=sha256:bf16c8e06762... local=[sha256:bf16c8e06762...]
 
 # 違いがあって pull した: 状態が変化する
-level=WARN msg="pull mismatch" image=ghcr.io/sasano8/app-authorization-demo:latest owners=[app-authorization-demo/Service/app-authorization-demo] remote=sha256:bf16c8e0… local=[sha256:4a45bcf8…] outcome=pulled
-level=INFO msg="pull match" image=ghcr.io/sasano8/app-authorization-demo:latest owners=[app-authorization-demo/Service/app-authorization-demo] remote=sha256:bf16c8e0… local=[sha256:bf16c8e0…] via=pulling
+level=WARN msg="pull mismatch" image=ghcr.io/sasano8/app-authorization-demo:latest owners=[app-authorization-demo/Service/app-authorization-demo] remote=sha256:bf16c8e06762... local=[sha256:4a45bcf8c937...] outcome=pulled
+level=INFO msg="pull match" image=ghcr.io/sasano8/app-authorization-demo:latest owners=[app-authorization-demo/Service/app-authorization-demo] remote=sha256:bf16c8e06762... local=[sha256:bf16c8e06762...] via=pulling
 
 # --dry-run: 最初の状態だけ
-level=WARN msg="pull mismatch" image=ghcr.io/sasano8/app-authorization-demo:latest owners=[…] remote=sha256:bf16c8e0… local=[sha256:4a45bcf8…] outcome=would-pull
+level=WARN msg="pull mismatch" image=ghcr.io/sasano8/app-authorization-demo:latest owners=[…] remote=sha256:bf16c8e06762... local=[sha256:4a45bcf8c937...] outcome=would-pull
 ```
 
 `outcome` は、`pull` が違いに対してしたこと。
@@ -370,8 +372,8 @@ level=WARN msg="pull mismatch" image=ghcr.io/sasano8/app-authorization-demo:late
 `trigger` の出力は、リソースとイメージごとに 1 行（これも形式の例）。
 
 ```
-level=INFO msg="trigger match" resource=tutorial/Deployment/web image=ghcr.io/sasano8/app-authorization-demo:latest local=[sha256:bf16c8e0…]
-level=WARN msg="trigger mismatch" resource=app-authorization-demo/Service/app-authorization-demo image=ghcr.io/sasano8/app-authorization-demo:latest running=revision=sha256:4a45bcf8… local=[sha256:bf16c8e0…]
+level=INFO msg="trigger match" resource=tutorial/Deployment/web image=ghcr.io/sasano8/app-authorization-demo:latest local=[sha256:bf16c8e06762...]
+level=WARN msg="trigger mismatch" resource=app-authorization-demo/Service/app-authorization-demo image=ghcr.io/sasano8/app-authorization-demo:latest running=revision=sha256:4a45bcf8c937... local=[sha256:bf16c8e06762...]
 level=WARN msg="trigger not-pulled" resource=tutorial/Deployment/proxy image=docker.io/library/nginx:latest hint="the local cache does not hold this tag (run pull first)"
 level=INFO msg="trigger not-running" resource=tutorial/DaemonSet/agent image=ghcr.io/o/agent:latest hint="nothing to compare (scaled to zero, or no digest reported)"
 ```

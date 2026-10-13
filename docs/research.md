@@ -94,7 +94,7 @@
 
 ## 4. Knative: テンプレートの annotation を変えると、新しい Revision ができるか
 
-結論: **できる**（ソースの読みと、Kubernetes の仕様からの推論。実機では未確認）。`rollout` の Knative 向けの動作は、これに頼っている。
+結論: **できる**（ソースの読みと Kubernetes の仕様から推論し、**実機で確認した**）。`rollout` の Knative 向けの動作は、これに頼っている。
 
 読んだ順に、根拠を並べる。
 
@@ -118,8 +118,15 @@
 
 つまり、`spec.template.metadata.annotations` に、毎回違う値の annotation を足せば、generation が増え、新しい Revision ができて、タグが解決し直される。
 
-- 確認できていない点: 「テンプレートの annotation の変更だけで、新しい Revision ができる」と書いた Knative の文書や、実際のクラスタでの結果は見つかっていない
-  （検索でも、直接の記述は見つからなかった）。上の 4 つの根拠をつなげた推論。
-  実機で確かめる（e2e には、Knative の確認を入れていない）。
+- **実機での確認（2026-10-14、`app-authorization-demo`）**: `pinner trigger` に `floatingtag-pinner/on-mismatch: rollout` を付けて実行したところ、
+  ksvc のテンプレートに annotation が足され、新しい Revision ができた。
+
+  | Revision | `status.containerStatuses[0].imageDigest` |
+  | --- | --- |
+  | `app-authorization-demo-00007`（`rollout` の前に動いていたもの） | `sha256:4a45bcf8…` |
+  | `app-authorization-demo-00008`（`rollout` で新しくできたもの） | `sha256:bf16c8e0…`（リモートの `latest`。ローカルのタグと同じ） |
+
+  新しい Revision は、作成時にタグを解決し直し、UI も最新になった。文書では「テンプレートの annotation の変更だけで新しい Revision ができる」とは
+  確認できていなかったが、上の 4 つの根拠をつなげた推論が、実機で裏付けられた。e2e には、Knative の確認を入れていない（Knative Serving のインストールが重いため）。
 - 注意: `kubectl apply`（クライアント側の apply）で annotation を足すと、`last-applied-configuration` との衝突が起きうる
   （[knative/client#964](https://github.com/knative/client/pull/964)）。このツールは `patch`（JSON merge patch）で足すので、影響しない見込み。

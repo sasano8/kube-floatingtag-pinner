@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 )
 
@@ -97,4 +98,43 @@ func ParseStates(s string, allowed ...State) (map[State]bool, error) {
 		out[State(name)] = true
 	}
 	return out, nil
+}
+
+// DefaultDigestLength is how many hex characters of a digest the log shows by default.
+const DefaultDigestLength = 12
+
+var digestRe = regexp.MustCompile(`sha256:[0-9a-f]{64}`)
+
+// ShortenDigests returns a slog ReplaceAttr that cuts every sha256 digest in the log attributes
+// to its first n hex characters followed by "..." (sha256:bf16c8e06762...). The full digest is
+// 71 characters and is the same to the eye for the first dozen. n <= 0 shows the digests whole.
+func ShortenDigests(n int) func(groups []string, a slog.Attr) slog.Attr {
+	if n <= 0 {
+		return nil
+	}
+	shorten := func(s string) string {
+		return digestRe.ReplaceAllStringFunc(s, func(m string) string {
+			const prefix = "sha256:"
+			hex := m[len(prefix):]
+			if n >= len(hex) {
+				return m
+			}
+			return prefix + hex[:n] + "..."
+		})
+	}
+	return func(_ []string, a slog.Attr) slog.Attr {
+		switch v := a.Value.Resolve().Any().(type) {
+		case string:
+			a.Value = slog.StringValue(shorten(v))
+		case []string:
+			out := make([]string, len(v))
+			for i, s := range v {
+				out[i] = shorten(s)
+			}
+			a.Value = slog.AnyValue(out)
+		case error:
+			a.Value = slog.StringValue(shorten(v.Error()))
+		}
+		return a
+	}
 }

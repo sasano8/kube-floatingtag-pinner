@@ -12,9 +12,9 @@ import (
 const DefaultAction = "info"
 
 // ActedOn are the events an action can be bound to (annotation on-<event>).
-// Only mismatch is the one most users need; not-pulled is optional and also defaults to info,
+// Only mismatch is the one most users need; not-pulled and error are optional and also default to info,
 // never to the mismatch action: with nothing to compare, acting blindly could repeat every pass.
-var ActedOn = []Status{StatusMismatch, StatusNotPulled}
+var ActedOn = []Status{StatusMismatch, StatusNotPulled, StatusError}
 
 // Action is what is done about a mismatch finding. The detection does not depend on it.
 type Action interface {
@@ -29,6 +29,10 @@ type Info struct{}
 func (Info) Name() string         { return "info" }
 func (Info) Supports(string) bool { return true }
 func (Info) Do(_ context.Context, f Finding) error {
+	if f.Status == StatusError {
+		slog.Error("error", "resource", f.Resource.String(), "image", f.Image, "err", f.Err)
+		return nil
+	}
 	if f.Status == StatusNotPulled {
 		slog.Warn("not-pulled", "resource", f.Resource.String(), "image", f.Image,
 			"hint", "the local cache does not hold this tag (run pull first)")

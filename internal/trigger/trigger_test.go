@@ -90,6 +90,15 @@ func TestNoLocalAndNoRunning(t *testing.T) {
 	}
 }
 
+func TestErrorFindingGoesToInfoByDefault(t *testing.T) {
+	info := &recorder{name: "info"}
+	a := trigger.NewActor(info)
+	f := trigger.Finding{Resource: trigger.Resource{Kind: "Deployment", Name: "d"}, Status: trigger.StatusError, Err: errors.New("boom")}
+	if err := a.Act(context.Background(), f); err != nil || len(info.got) != 1 {
+		t.Fatalf("%v %d", err, len(info.got))
+	}
+}
+
 func TestRunningErrorIsReported(t *testing.T) {
 	local := fakeLocal{img: {"n1": {"sha256:B"}}}
 	f := detect(t, local, fakeRunning{err: errors.New("boom")}, deploy("web"))[0]

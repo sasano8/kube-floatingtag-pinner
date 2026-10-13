@@ -206,8 +206,10 @@ func triggerPass(ctx context.Context, d *trigger.Detector, actor *trigger.Actor)
 		attrs := []any{"resource", f.Resource.String(), "image", f.Image}
 		switch f.Status {
 		case trigger.StatusError:
-			ok = false
-			slog.Error("failed", append(attrs, "err", f.Err)...)
+			ok = false // the exit code reports it whatever the action does
+			if err := actor.Act(ctx, f); err != nil {
+				slog.Error("action failed", append(attrs, "err", err)...)
+			}
 		case trigger.StatusMismatch, trigger.StatusNotPulled:
 			if err := actor.Act(ctx, f); err != nil {
 				ok = false

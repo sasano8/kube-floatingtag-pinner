@@ -113,7 +113,10 @@ digest を別に記録することはしない（正本はリモートのレジ�
 | --- | --- | --- |
 | `floatingtag-pinner/on-mismatch` | ローカルと違うときのアクション。**ふつうは、これだけ指定すればよい** | `info` |
 | `floatingtag-pinner/on-not-pulled` | ローカルキャッシュがタグを持っていないときのアクション（任意） | `info` |
+| `floatingtag-pinner/on-error` | 比較の途中で失敗したときのアクション（任意） | `info` |
 
+- `match` と `not-running` には、アクションを結び付けない（何もしない。INFO のログだけ）。
+- `error` は、アクションにかかわらず、終了コードが非 0 になる。`info` は、失敗の理由（エラーの文字列）をログに出す。
 - `on-not-pulled` は `on-mismatch` を引き継がず、既定は `info`。比べる相手が無いので、何かを実行し続ける恐れがあるため
   （たとえば Knative は、Revision の Pod が digest で pull するので、ノードにタグが付かず、`not-pulled` のままになりうる）。
 - アクション: `info`（ログに出すだけ）、`none`（何もしない）。ほかは未実装。
@@ -255,7 +258,7 @@ level=INFO msg="not-running: nothing to compare (scaled to zero, or no digest re
 | `mismatch` | 一致しない。**新しいのか古いのかは分からない**（違うことだけが分かる） | 実行する（`on-mismatch`。未指定は `info`） |
 | `not-pulled` | ローカルキャッシュが、そのタグを持っていない。先に `pull` を実行する | 実行する（`on-not-pulled`。未指定は `info`） |
 | `not-running` | 比べる相手（実行中の Pod / Revision の digest）が無い（Pod が 0、Revision が未 ready、`imageID` に digest が無い、など） | 実行しない |
-| `error` | 比較の途中で失敗した（権限、取得の失敗など）。1 つでもあると終了コードは非 0 | 実行しない |
+| `error` | 比較の途中で失敗した（権限、取得の失敗など）。1 つでもあると終了コードは非 0 | 実行する（`on-error`。未指定は `info`） |
 
 - Pod は、その Pod が動くノードのタグと比べる。複数の Pod のうち 1 つでも違えば `mismatch`（違う Pod ごとに `running=` に出る）。
 - Knative の Revision は、ローカル全体のタグと比べる。

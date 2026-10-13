@@ -209,13 +209,17 @@ Pod から取るのは「タグ」と「digest」の両方。タグはどのロ�
 - アクションは、**イベント**（`trigger` のステータス）ごとに、リソースの annotation で指定する。
   - `floatingtag-pinner/on-mismatch: <名前>`: ローカルと違うとき。**ふつうは、これだけ指定すればよい**。
   - `floatingtag-pinner/on-not-pulled: <名前>`: ローカルキャッシュがタグを持っていないとき（任意）。
+  - `floatingtag-pinner/on-error: <名前>`: 比較の途中で失敗したとき（任意）。`info` は理由をログに出す。終了コードは、アクションにかかわらず非 0。
+  - `match` と `not-running` には結び付けない（何もしない）。
   - どちらも未指定なら `info`。**`on-not-pulled` は `on-mismatch` を引き継がない。** `not-pulled` は比べる相手が無く、
     何を直すのか分からないため。たとえば Knative は、Revision の Pod が digest で pull するのでノードにタグが付かず、
     `not-pulled` のままになりうる。`new-revision` を引き継ぐと、`--daemon` の周期ごとに新しい Revision を作り続ける。
     対処は、アクションではなく、第一段階の `pull`（pinner 駆動の pull）。
   - 「誰が pull するか」（第一段階: `pull` を使う＝pinner 駆動、使わず Pod の起動に任せる＝Pod 駆動）と、
     「違いを見つけたとき何をするか」（第二段階: このアクション）は、別の軸。
-  - 今後、`not-running` などにも結び付けられるようにする余地はあるが、いまは `mismatch` と `not-pulled` だけ。
+  - 今後、`not-running` などにも結び付けられるようにする余地はあるが、いまは `mismatch`、`not-pulled`、`error` だけ。
+  - Go のエラーにはスタックトレースが付かない。代わりに、各層でエラーに文脈を足している（`local: …`、`running: …` など）。
+    スタックトレースが要る場合は、`--debug` のようなフラグで後から足せる。
 - **未指定は `info`（差分をログに出すだけ）**。ユーザーの管轄のものには、頼まれない限り触らない。
   リソースに手を入れずに、検知できているかを確かめる手段にもなる。`none` は、検知した結果にも何もしない（ログも出さない）。
 - `trigger --dry-run`（予定）は、どのアクションも `info` として扱うスイッチ。`info` はリソース単位、`--dry-run` は全体の指定。

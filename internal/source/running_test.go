@@ -88,7 +88,7 @@ func TestResourcesCarryActionSelectorAndRevision(t *testing.T) {
 	dep := obj("apps/v1", "Deployment", "a", "web", true, "r/app:latest")
 	dep.Object["spec"].(map[string]interface{})["selector"] = map[string]interface{}{
 		"matchLabels": map[string]interface{}{"app": "web", "tier": "fe"}}
-	dep.SetAnnotations(map[string]string{source.DefaultAnnotation: "true", source.ActionAnnotation: "none"})
+	dep.SetAnnotations(map[string]string{source.DefaultAnnotation: "true", source.ActionAnnotationPrefix + "mismatch": "none"})
 	ksvc := obj("serving.knative.dev/v1", "Service", "b", "k", true, "r/app:latest")
 	ksvc.Object["status"] = map[string]interface{}{"latestReadyRevisionName": "k-00003"}
 
@@ -97,10 +97,10 @@ func TestResourcesCarryActionSelectorAndRevision(t *testing.T) {
 		t.Fatalf("%+v %v", got, err)
 	}
 	byName := map[string]trigger.Resource{got[0].Name: got[0], got[1].Name: got[1]}
-	if w := byName["web"]; w.Action != "none" || w.Selector != "app=web,tier=fe" {
+	if w := byName["web"]; w.Actions["mismatch"] != "none" || w.Selector != "app=web,tier=fe" {
 		t.Fatalf("%+v", w)
 	}
-	if k := byName["k"]; k.Revision != "k-00003" || k.Action != "" {
+	if k := byName["k"]; k.Revision != "k-00003" || len(k.Actions) != 0 {
 		t.Fatalf("%+v", k)
 	}
 }

@@ -208,13 +208,11 @@ func triggerPass(ctx context.Context, d *trigger.Detector, actor *trigger.Actor)
 		case trigger.StatusError:
 			ok = false
 			slog.Error("failed", append(attrs, "err", f.Err)...)
-		case trigger.StatusMismatch:
+		case trigger.StatusMismatch, trigger.StatusNotPulled:
 			if err := actor.Act(ctx, f); err != nil {
 				ok = false
 				slog.Error("action failed", append(attrs, "err", err)...)
 			}
-		case trigger.StatusNotPulled:
-			slog.Info("not-pulled: the local cache does not hold this tag (run pull first)", attrs...)
 		case trigger.StatusNotRunning:
 			slog.Info("not-running: nothing to compare (scaled to zero, or no digest reported)", attrs...)
 		default:

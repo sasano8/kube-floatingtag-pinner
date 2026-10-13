@@ -110,29 +110,40 @@ func (r *recorder) Do(_ context.Context, f trigger.Finding) error {
 	return nil
 }
 
-func TestActorPicksActionByAnnotation(t *testing.T) {
+func TestActorPicksActionByEventAnnotation(t *testing.T) {
 	info, other := &recorder{name: "info"}, &recorder{name: "other"}
 	a := trigger.NewActor(info, other)
+	ctx := context.Background()
 
-	f := trigger.Finding{Resource: trigger.Resource{Kind: "Deployment", Name: "d"}, Mismatches: []trigger.Mismatch{{}}}
-	if err := a.Act(context.Background(), f); err != nil || len(info.got) != 1 {
+	f := trigger.Finding{Resource: trigger.Resource{Kind: "Deployment", Name: "d"}, Status: trigger.StatusMismatch,
+		Mismatches: []trigger.Mismatch{{}}}
+	if err := a.Act(ctx, f); err != nil || len(info.got) != 1 {
 		t.Fatalf("default must be info: %v %d", err, len(info.got))
 	}
-	f.Action = "other"
-	if err := a.Act(context.Background(), f); err != nil || len(other.got) != 1 {
+	f.Actions = map[string]string{"mismatch": "other"}
+	if err := a.Act(ctx, f); err != nil || len(other.got) != 1 {
+		t.Fatalf("%v", err)
+	}
+	// on-mismatch is not inherited by not-pulled: it stays info
+	f.Status = trigger.StatusNotPulled
+	if err := a.Act(ctx, f); err != nil || len(other.got) != 1 || len(info.got) != 2 {
+		t.Fatalf("not-pulled must default to info, not to the mismatch action: %v", err)
+	}
+	f.Actions["not-pulled"] = "other"
+	if err := a.Act(ctx, f); err != nil || len(other.got) != 2 {
 		t.Fatalf("%v", err)
 	}
 	a.ForceInfo = true
-	if err := a.Act(context.Background(), f); err != nil || len(other.got) != 1 || len(info.got) != 2 {
+	if err := a.Act(ctx, f); err != nil || len(other.got) != 2 || len(info.got) != 3 {
 		t.Fatalf("ForceInfo must run info: %v", err)
 	}
 	a.ForceInfo = false
-	f.Action = "missing"
-	if err := a.Act(context.Background(), f); err == nil {
+	f.Actions["not-pulled"] = "missing"
+	if err := a.Act(ctx, f); err == nil {
 		t.Fatal("unknown action must be an error")
 	}
-	f.Action, f.Kind = "other", "Service"
-	if err := a.Act(context.Background(), f); err == nil {
+	f.Actions["not-pulled"], f.Kind = "other", "Service"
+	if err := a.Act(ctx, f); err == nil {
 		t.Fatal("unsupported kind must be an error")
 	}
 }

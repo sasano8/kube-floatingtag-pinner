@@ -47,8 +47,9 @@ type Kube struct {
 	FloatingTags []string
 }
 
-// ActionAnnotation names the action a resource wants when what it runs differs from the local cache.
-const ActionAnnotation = "floatingtag-pinner/action"
+// ActionAnnotationPrefix + <event> names the action for an event, e.g.
+// floatingtag-pinner/on-mismatch: restart. Most resources only need on-mismatch.
+const ActionAnnotationPrefix = "floatingtag-pinner/on-"
 
 // Resources lists the annotated resources with their floating-tag images.
 func (k *Kube) Resources(ctx context.Context) ([]trigger.Resource, error) {
@@ -74,8 +75,13 @@ func (k *Kube) Resources(ctx context.Context) ([]trigger.Resource, error) {
 				Kind:      obj.GetKind(),
 				Namespace: obj.GetNamespace(),
 				Name:      obj.GetName(),
-				Action:    obj.GetAnnotations()[ActionAnnotation],
 				Selector:  selector(obj),
+				Actions:   map[string]string{},
+			}
+			for _, ev := range trigger.ActedOn {
+				if v := obj.GetAnnotations()[ActionAnnotationPrefix+string(ev)]; v != "" {
+					res.Actions[string(ev)] = v
+				}
 			}
 			res.Revision, _, _ = unstructured.NestedString(obj.Object, "status", "latestReadyRevisionName")
 			for _, img := range images(obj, kd.podSpec) {

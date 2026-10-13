@@ -16,9 +16,9 @@ type Resource struct {
 	Namespace string
 	Name      string
 	Images    []string
-	Action    string // name from the action annotation; "" = default
-	Selector  string // pod label selector (workloads)
-	Revision  string // latest ready Revision (Knative Service)
+	Actions   map[string]string // event ("mismatch", "not-pulled") -> action name, from the on-<event> annotations
+	Selector  string            // pod label selector (workloads)
+	Revision  string            // latest ready Revision (Knative Service)
 }
 
 func (r Resource) String() string { return fmt.Sprintf("%s/%s/%s", r.Namespace, r.Kind, r.Name) }

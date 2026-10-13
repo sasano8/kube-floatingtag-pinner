@@ -107,7 +107,16 @@ digest を別に記録することはしない（正本はリモートのレジ�
 第二段階はアクション（将来は Pod の削除など）の実行を伴うので、`pull` だけでは動かない。第二段階まで行うときは、`trigger` か `sync` を明示する。
 現状の `trigger` のアクションは `info`（差分をログに出す。既定）と `none`（何もしない）だけで、リソースには何も変更しない。
 `delete-pods` などは未実装で、指定するとエラーになる。
-アクションは、リソースの annotation `floatingtag-pinner/action` で指定する。未指定は `info`（差分をログに出すだけ）で、リソースには何も変更しない。`none` は、検知した結果にも何もしない。
+アクションは、リソースの annotation で、イベント（`trigger` のステータス）ごとに指定する。
+
+| annotation | 意味 | 既定 |
+| --- | --- | --- |
+| `floatingtag-pinner/on-mismatch` | ローカルと違うときのアクション。**ふつうは、これだけ指定すればよい** | `info` |
+| `floatingtag-pinner/on-not-pulled` | ローカルキャッシュがタグを持っていないときのアクション（任意） | `info` |
+
+- `on-not-pulled` は `on-mismatch` を引き継がず、既定は `info`。比べる相手が無いので、何かを実行し続ける恐れがあるため
+  （たとえば Knative は、Revision の Pod が digest で pull するので、ノードにタグが付かず、`not-pulled` のままになりうる）。
+- アクション: `info`（ログに出すだけ）、`none`（何もしない）。ほかは未実装。
 
 ## インストール
 
@@ -234,7 +243,7 @@ level=WARN msg=new       image=docker.io/library/nginx:latest owners=[tutorial/D
 ```
 level=INFO msg=match resource=tutorial/Deployment/web image=ghcr.io/sasano8/app-authorization-demo:latest local=[sha256:bf16c8e0…]
 level=WARN msg=mismatch resource=app-authorization-demo/Service/app-authorization-demo image=ghcr.io/sasano8/app-authorization-demo:latest running=revision=sha256:4a45bcf8… local=[sha256:bf16c8e0…]
-level=INFO msg="not-pulled: the local cache does not hold this tag (run pull first)" resource=tutorial/Deployment/proxy image=docker.io/library/nginx:latest
+level=WARN msg=not-pulled resource=tutorial/Deployment/proxy image=docker.io/library/nginx:latest hint="the local cache does not hold this tag (run pull first)"
 level=INFO msg="not-running: nothing to compare (scaled to zero, or no digest reported)" resource=tutorial/DaemonSet/agent image=ghcr.io/o/agent:latest
 ```
 
@@ -243,8 +252,8 @@ level=INFO msg="not-running: nothing to compare (scaled to zero, or no digest re
 | ステータス | 意味 | アクション |
 | --- | --- | --- |
 | `match` | 実行中の digest が、ローカルのタグの digest と一致する | 実行しない |
-| `mismatch` | 一致しない。**新しいのか古いのかは分からない**（違うことだけが分かる） | 実行する（annotation の指定。未指定は `info`） |
-| `not-pulled` | ローカルキャッシュが、そのタグを持っていない。先に `pull` を実行する | 実行しない |
+| `mismatch` | 一致しない。**新しいのか古いのかは分からない**（違うことだけが分かる） | 実行する（`on-mismatch`。未指定は `info`） |
+| `not-pulled` | ローカルキャッシュが、そのタグを持っていない。先に `pull` を実行する | 実行する（`on-not-pulled`。未指定は `info`） |
 | `not-running` | 比べる相手（実行中の Pod / Revision の digest）が無い（Pod が 0、Revision が未 ready、`imageID` に digest が無い、など） | 実行しない |
 | `error` | 比較の途中で失敗した（権限、取得の失敗など）。1 つでもあると終了コードは非 0 | 実行しない |
 

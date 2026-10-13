@@ -8,8 +8,13 @@ import (
 	"strings"
 )
 
-// DefaultAction is used when a resource names no action: it only reports.
+// DefaultAction is used when a resource names no action for an event: it only reports.
 const DefaultAction = "info"
+
+// ActedOn are the events an action can be bound to (annotation on-<event>).
+// Only mismatch is the one most users need; not-pulled is optional and also defaults to info,
+// never to the mismatch action: with nothing to compare, acting blindly could repeat every pass.
+var ActedOn = []Status{StatusMismatch, StatusNotPulled}
 
 // Action is what is done about a mismatch finding. The detection does not depend on it.
 type Action interface {
@@ -24,6 +29,11 @@ type Info struct{}
 func (Info) Name() string         { return "info" }
 func (Info) Supports(string) bool { return true }
 func (Info) Do(_ context.Context, f Finding) error {
+	if f.Status == StatusNotPulled {
+		slog.Warn("not-pulled", "resource", f.Resource.String(), "image", f.Image,
+			"hint", "the local cache does not hold this tag (run pull first)")
+		return nil
+	}
 	var running []string
 	for _, s := range f.Mismatches {
 		who := s.Pod
@@ -60,7 +70,7 @@ func NewActor(actions ...Action) *Actor {
 }
 
 func (a *Actor) Act(ctx context.Context, f Finding) error {
-	name := f.Action
+	name := f.Actions[string(f.Status)]
 	if name == "" || a.ForceInfo {
 		name = DefaultAction
 	}

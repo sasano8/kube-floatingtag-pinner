@@ -233,6 +233,59 @@ pinner collect              # kubeconfig のクラスタで、annotation の付�
 
    途中で、`--max-actions 1` を付けると、1 回の実行で依頼する数を 1 件に抑えられる。
 
+## Deployment での確認（`delete-pods`、`rollout`）
+
+アプリが落ちる（`CrashLoopBackOff`）と、kubelet が再起動するたびに、ノードのタグを拾い直してしまい、`mismatch` が自然に消える
+（`delete-pods` を試せない）。そこで、**落ちない専用のイメージ**を使う。`busybox` にラベルを足しただけの 2 つのイメージ（中身は同じで、digest だけが違う）を作り、
+タグ `latest` を、その間で付け替えて、「リモートのタグが動いた」状況を作る。
+
+**1. 専用イメージを作る**（`docker login ghcr.io` 済みで、手元が、動かすノードと同じアーキテクチャであること）
+
+```sh
+cd "$(mktemp -d)"
+for v in v1 v2; do
+  printf 'FROM busybox:1.36\nLABEL pinner.test=%s\n' "$v" > Dockerfile
+  docker build -q -t ghcr.io/sasano8/pinner-test:$v .
+  docker push ghcr.io/sasano8/pinner-test:$v
+done
+set_latest() { docker tag ghcr.io/sasano8/pinner-test:$1 ghcr.io/sasano8/pinner-test:latest && docker push ghcr.io/sasano8/pinner-test:latest; }
+set_latest v1
+```
+
+ghcr のパッケージは、初回は private なので、GitHub の Packages → `pinner-test` → Package settings → Change visibility → **Public** にする
+（private のままなら、imagePullSecret を作って、Deployment と `--pull-secret` に指定する）。
+
+**2. Deployment を作る**（`imagePullPolicy: IfNotPresent`。Pod が作り直されたときに、ノードのタグが使われることを確かめるため）
+
+```sh
+kubectl create namespace pinner-test
+kubectl -n pinner-test create deployment sleeper --image=ghcr.io/sasano8/pinner-test:latest --replicas=2 \
+  -- sh -c 'while true; do sleep 60; done'
+kubectl -n pinner-test patch deployment sleeper --type=json \
+  -p '[{"op":"add","path":"/spec/template/spec/containers/0/imagePullPolicy","value":"IfNotPresent"}]'
+kubectl -n pinner-test annotate deployment sleeper floatingtag-pinner/enabled=true
+```
+
+**3. 流れ**（ノードの一覧への反映は数分遅れるので、`match` / `mismatch` が期待どおりにならなければ、待ってやり直す。`--debug` で、何を読んだか分かる）
+
+```sh
+pinner pull --namespace pinner-test && pinner trigger --namespace pinner-test      # どちらも match
+set_latest v2
+pinner pull --namespace pinner-test              # pull mismatch → pull match（via=pulling）
+pinner trigger --debug --namespace pinner-test   # trigger mismatch（Pod は v1、ローカルは v2）
+
+kubectl -n pinner-test annotate deployment sleeper floatingtag-pinner/on-mismatch=delete-pods
+gen=$(kubectl -n pinner-test get deployment sleeper -o jsonpath='{.metadata.generation}')
+pinner trigger --dry-run --namespace pinner-test # would run action … delete-pods（何も変わらない）
+pinner trigger --namespace pinner-test           # action requested … delete-pods
+kubectl -n pinner-test get pods -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.containerStatuses[0].imageID}{"\n"}{end}'   # 新しい Pod は v2
+test "$(kubectl -n pinner-test get deployment sleeper -o jsonpath='{.metadata.generation}')" = "$gen" && echo "generation unchanged"
+pinner trigger --namespace pinner-test           # trigger match
+```
+
+`rollout` も同じ手順で試せる（`on-mismatch=rollout` にして、`set_latest v1` で付け替え、`pull`、`trigger`。Pod テンプレートに `floatingtag-pinner/restartedAt` が付き、ローリング更新になる）。
+片付け: `kubectl delete namespace pinner-test`。
+
 ## コマンド（仮）
 
 コマンドは段階ごとに分ける（段階ごとにリスクと必要な権限が違い、動かす間隔も別にできるため）。名前は仮で、再考の余地がある。

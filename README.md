@@ -93,6 +93,143 @@ flowchart TB
 digest を別に記録することはしない（正本はリモートのレジストリ、状態はローカルキャッシュ自身が持つ）。
 実行中の Pod との突き合わせとアクションの実行は、第二段階で行う。
 
+## インストール
+
+手元で動かす想定（クラスタの中で動かす構成は、まだ考えていない）。ビルド済みのバイナリをダウンロードするのが、いちばん簡単。
+
+### 前提
+
+- 対象のクラスタに届く `kubeconfig`（`--kubeconfig`、または `~/.kube/config`）。手元の `kubeconfig` が管理者の権限なら、権限の設定は要らない。
+- `kubectl`（annotation を付けたり、動作を確かめたりするため）。
+- 必要な権限（管理者でないとき）:
+
+  | コマンド | 権限 |
+  | --- | --- |
+  | `collect` | 対象リソースの `list`（`apps` の `deployments`、`statefulsets`、`daemonsets`、Knative の `services`） |
+  | `pull` | 上記 + `nodes` の `list` + `--pull-namespace` での `pods` の `create` / `get` / `delete` |
+  | `trigger` | `collect` と同じ + `nodes` の `list` + `pods` の `list` + Knative の `revisions` の `get`。アクションごとに、`rollout` は対象リソースの `patch`、`delete-pods` は `pods` の `delete` |
+
+### バイナリをダウンロードする
+
+[`latest` の Release](https://github.com/sasano8/kube-floatingtag-pinner/releases/tag/latest) に、`main` の最新から作ったバイナリがある。
+`main` に push するたびに、CI が**上書き**する（バージョン番号は付けない）。
+
+| OS | アーキ | ファイル |
+| --- | --- | --- |
+| Linux | amd64 / arm64 | `pinner_linux_amd64.tar.gz` / `pinner_linux_arm64.tar.gz` |
+| macOS | amd64（Intel）/ arm64（Apple Silicon） | `pinner_darwin_amd64.tar.gz` / `pinner_darwin_arm64.tar.gz` |
+| Windows | amd64 / arm64 | `pinner_windows_amd64.zip` / `pinner_windows_arm64.zip` |
+
+`checksums.txt` に SHA-256 がある。
+
+**Linux / macOS**
+
+```sh
+# gh があれば（Linux の amd64 の例。ファイル名は表から選ぶ）
+gh release download latest -R sasano8/kube-floatingtag-pinner -p 'pinner_linux_amd64.tar.gz'
+# gh がなければ
+curl -fsSLO https://github.com/sasano8/kube-floatingtag-pinner/releases/download/latest/pinner_linux_amd64.tar.gz
+
+tar xzf pinner_linux_amd64.tar.gz     # → ./pinner
+sudo mv pinner /usr/local/bin/        # 任意。PATH の通った場所へ
+pinner collect --help
+```
+
+**macOS だけ**: 署名していないので、初回に「開発元を確認できない」と警告される。`xattr -d com.apple.quarantine pinner` で外せる。
+
+**Windows**（PowerShell）
+
+```powershell
+Invoke-WebRequest https://github.com/sasano8/kube-floatingtag-pinner/releases/download/latest/pinner_windows_amd64.zip -OutFile pinner.zip
+Expand-Archive pinner.zip -DestinationPath .       # → .\pinner.exe
+.\pinner.exe collect --help
+```
+
+ブラウザからは、上の Release のページで、自分の OS のファイルを取って、展開する。
+
+### ソースからビルドする
+
+Go（`go.mod` の版）が必要。
+
+```sh
+git clone https://github.com/sasano8/kube-floatingtag-pinner && cd kube-floatingtag-pinner
+go build -o pinner ./cmd/pinner          # → ./pinner（Windows は pinner.exe）
+# ビルドせずに試すなら: go run ./cmd/pinner collect
+```
+
+CI は、あわせて `ghcr.io/sasano8/kube-floatingtag-pinner`（amd64 / arm64 のコンテナイメージ）も公開している。ただし、このイメージでの実行は試していない。
+
+### 動作確認（インストールできたか）
+
+```sh
+pinner collect --help       # フラグの一覧が出る
+pinner collect              # kubeconfig のクラスタで、annotation の付いたリソースを一覧する（読み取りのみ。何も無ければ、表の見出しだけ）
+```
+
+`pinner collect` が、クラスタに届いて、表の見出し（`RESOURCE  IMAGE  TRACKED …`）を出せば、インストールと接続は、できている。
+
+## 動作確認の手順（`app-authorization-demo` で確かめる）
+
+1. **対象にする。** Knative Service の `metadata.annotations` に付ける（`spec.template` ではない。テンプレートを変えると、新しい Revision ができてしまう）。
+
+   ```sh
+   kubectl annotate ksvc app-authorization-demo -n app-authorization-demo floatingtag-pinner/enabled=true
+   ```
+
+2. **集まっているか見る。**
+
+   ```sh
+   pinner collect --namespace app-authorization-demo
+   ```
+
+   `ghcr.io/sasano8/app-authorization-demo:latest` が `TRACKED` = `yes` で出れば、対象になっている。`no: …` なら、理由が出る。
+
+3. **ドライランで見る**（何も pull しない。リモートとローカルを読むだけ）。
+
+   ```sh
+   pinner pull --dry-run --namespace app-authorization-demo
+   ```
+
+   `pull mismatch` に `outcome=would-pull` と出れば、ローカルのタグがリモートと違い、pull が必要。`remote=` と `local=` の digest を見比べる。
+
+4. **pull する。**
+
+   ```sh
+   pinner pull --namespace app-authorization-demo
+   ```
+
+   `pull mismatch`（`outcome=pulled`）に続けて `pull match`（`via=pulling`）と出れば、ノードのタグが、リモートの digest になった。
+
+5. **ノードで確かめる。**
+
+   ```sh
+   kubectl get nodes -o json | jq -r '.items[] | .metadata.name as $n | .status.images[]
+     | select(any(.names[]; contains("app-authorization-demo"))) | "\($n)\t\(.names | join(" "))"'
+   crane digest ghcr.io/sasano8/app-authorization-demo:latest     # リモートの digest
+   ```
+
+   `repo:latest` と同じエントリに、リモートの digest（`repo@sha256:…`）が載っていれば成功。もう一度 `pinner pull` を実行すると、`pull match` だけになる。
+
+6. **動いているものがローカルと違うかを調べる**（何も変更しない）。
+
+   ```sh
+   pinner trigger --namespace app-authorization-demo
+   ```
+
+   Revision の digest がローカルのタグと違えば `trigger mismatch`、同じなら `trigger match`。
+
+7. **アクションを試す**（ここからは、リソースが変わる）。まず `--dry-run` で、何が実行されるかを見る。
+
+   ```sh
+   kubectl annotate ksvc app-authorization-demo -n app-authorization-demo floatingtag-pinner/on-mismatch=rollout
+   pinner trigger --dry-run --namespace app-authorization-demo     # 'would run action ... rollout' と出る
+   pinner trigger --namespace app-authorization-demo               # 実行する（新しい Revision ができる）
+   kubectl get revision -n app-authorization-demo                  # 新しい Revision が増えている
+   pinner trigger --namespace app-authorization-demo               # 新しい Revision なら、trigger match になる
+   ```
+
+   途中で、`--max-actions 1` を付けると、1 回の実行で依頼する数を 1 件に抑えられる。
+
 ## コマンド（仮）
 
 コマンドは段階ごとに分ける（段階ごとにリスクと必要な権限が違い、動かす間隔も別にできるため）。名前は仮で、再考の余地がある。

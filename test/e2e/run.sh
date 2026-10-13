@@ -2,7 +2,7 @@
 # End-to-end test against a real cluster: kind (a real kubelet and containerd) plus a local registry,
 # so that "the remote's tag moved" can be made to happen at will, with no Docker Hub, no rate limit.
 #
-# Needs: docker, kind, kubectl. Usage: test/e2e/run.sh /path/to/pinner
+# Needs: docker, kind, kubectl, crane. Usage: test/e2e/run.sh /path/to/pinner
 # Not run by CI by default (see .github/workflows/e2e.yml).
 set -euo pipefail
 
@@ -25,37 +25,48 @@ trap cleanup EXIT
 step() { echo; echo "== $*"; }
 fail() { echo "FAIL: $*" >&2; echo "--- last pinner output:" >&2; cat "$LOG" >&2 || true; exit 1; }
 
-# run_pinner <args...>: runs pinner, keeps its output in $LOG, returns its exit code
-run_pinner() {
+# run_in <namespace> <args...>: runs pinner on one namespace, keeps its output in $LOG, returns its exit code
+run_in() {
+  local ns=$1; shift
   set +e
-  "$PINNER" "$@" --kubeconfig "$KUBECONFIG" --namespace "$NS" >"$LOG" 2>&1
+  "$PINNER" "$@" --kubeconfig "$KUBECONFIG" --namespace "$ns" >"$LOG" 2>&1
   local rc=$?
   set -e
   cat "$LOG"
   return $rc
 }
+run_pinner() { run_in "$NS" "$@"; }
 expect() { grep -Eq "$1" "$LOG" || fail "expected a line matching: $1"; }
 expect_not() { ! grep -Eq "$1" "$LOG" || fail "unexpected line matching: $1"; }
 
 # wait_local_matches: the kubelet refreshes Node.status.images only every few minutes, so what pull and trigger
 # read as "the local state" can be behind what was just pulled. Wait until pull sees the tag as matching.
 wait_local_matches() {
+  local ns=${1:-$NS}
   local deadline=$((SECONDS + 420))
   while :; do
-    run_pinner pull --dry-run >/dev/null 2>&1 || true
+    run_in "$ns" pull --dry-run >/dev/null 2>&1 || true
     grep -q 'msg="pull match"' "$LOG" && return 0
     [ "$SECONDS" -lt "$deadline" ] || fail "Node.status.images did not show the pulled image within 7 minutes"
     sleep 10
   done
 }
 
-# push_image <label>: builds a tiny image whose content depends on <label>, and pushes it as :latest
-push_image() {
-  local dir="${WORK}/img-$1"
+# push_to <image> <label>: builds a tiny image whose content depends on <label>, and pushes it
+push_to() {
+  local dir="${WORK}/img-$(echo "$1" | tr -c 'a-zA-Z0-9\n' _)-$2"
   mkdir -p "$dir"
-  printf 'FROM busybox:1.36\nLABEL e2e.version=%s\nCMD ["sleep","3600"]\n' "$1" >"$dir/Dockerfile"
-  docker build -q -t "$IMAGE" "$dir" >/dev/null
-  docker push -q "$IMAGE" >/dev/null
+  printf 'FROM busybox:1.36\nLABEL e2e.version=%s\nCMD ["sleep","3600"]\n' "$2" >"$dir/Dockerfile"
+  docker build -q -t "$1" "$dir" >/dev/null
+  docker push -q "$1" >/dev/null
+}
+push_image() { push_to "$IMAGE" "$1"; }
+
+# new_app <namespace> <image> <replicas>: a Deployment "app" that pinner tracks
+new_app() {
+  kubectl create namespace "$1"
+  kubectl -n "$1" create deployment app --image="$2" --replicas="$3"
+  kubectl -n "$1" annotate deployment app floatingtag-pinner/enabled=true
 }
 
 step "registry and cluster"
@@ -179,6 +190,103 @@ step "trigger again: the new Pod runs the local digest -> match"
 run_pinner trigger || fail "trigger exited non-zero"
 expect 'msg="trigger match"'
 expect_not 'msg="trigger mismatch"'
+
+step "error: the registry has no such image -> pull exits non-zero, trigger says not-pulled"
+new_app e2e-missing "localhost:${REG_PORT}/e2e/missing:latest" 0
+if run_in e2e-missing pull; then fail "pull must exit non-zero when the registry cannot answer"; fi
+expect 'msg="pull error"'
+run_in e2e-missing trigger || fail "trigger exited non-zero"
+expect 'msg="trigger not-pulled"'
+
+step "not-pulled and not-running: an image no node holds, with nothing running"
+FRESH="localhost:${REG_PORT}/e2e/fresh:latest"
+push_to "$FRESH" v1
+new_app e2e-fresh "$FRESH" 0
+run_in e2e-fresh pull --on-new=ignore || fail "pull exited non-zero"
+expect 'msg="pull not-pulled".*outcome=ignored'
+run_in e2e-fresh pull --dry-run || fail "pull --dry-run exited non-zero"
+expect 'msg="pull not-pulled".*outcome=would-pull'
+run_in e2e-fresh pull || fail "pull exited non-zero"
+expect 'msg="pull not-pulled".*outcome=pulled'
+expect 'msg="pull match".*via=pulling'
+wait_local_matches e2e-fresh
+run_in e2e-fresh trigger || fail "trigger exited non-zero"
+expect 'msg="trigger not-running"' # pulled, but scaled to zero: nothing to compare
+kubectl -n default get pods -l app.kubernetes.io/managed-by=floatingtag-pinner -o name | grep -q . &&
+  fail "the pull Pods must be deleted after the pull"
+
+step "a Pod that restarts by itself follows the node's tag; no action is needed"
+CRASH="localhost:${REG_PORT}/e2e/crash:latest"
+push_to "$CRASH" v1
+new_app e2e-crash "$CRASH" 1
+kubectl -n e2e-crash patch deployment app --type=json -p '[
+  {"op":"add","path":"/spec/template/spec/containers/0/imagePullPolicy","value":"IfNotPresent"},
+  {"op":"add","path":"/spec/template/spec/containers/0/command","value":["sh","-c","sleep 20; exit 1"]}]'
+for _ in $(seq 60); do # wait for the first container to have pulled and started
+  [ -n "$(kubectl -n e2e-crash get pods -o jsonpath='{.items[0].status.containerStatuses[0].imageID}' 2>/dev/null)" ] && break
+  sleep 2
+done
+crash_pod=$(kubectl -n e2e-crash get pods -o jsonpath='{.items[0].metadata.name}')
+push_to "$CRASH" v2
+run_in e2e-crash pull || fail "pull exited non-zero"
+expect 'msg="pull match".*via=pulling'
+wait_local_matches e2e-crash
+deadline=$((SECONDS + 180))
+until run_in e2e-crash trigger >/dev/null 2>&1 && grep -q 'msg="trigger match"' "$LOG"; do
+  [ "$SECONDS" -lt "$deadline" ] || fail "the restarted container never came to run the node's digest"
+  sleep 10
+done
+expect_not 'action requested'
+[ "$(kubectl -n e2e-crash get pods -o jsonpath='{.items[0].metadata.name}')" = "$crash_pod" ] ||
+  fail "the Pod must be the same one: only its container restarted"
+[ "$(kubectl -n e2e-crash get pods -o jsonpath='{.items[0].status.containerStatuses[0].restartCount}')" -gt 0 ] ||
+  fail "the container must have restarted"
+
+step "a multi-arch image: the tag's digest is the index digest, and the node reports the same one"
+MULTI="localhost:${REG_PORT}/e2e/multi:latest"
+crane copy busybox:1.36 "$MULTI" # an image index (several platforms), copied as it is
+new_app e2e-multi "$MULTI" 1
+kubectl -n e2e-multi patch deployment app --type=json -p '[
+  {"op":"add","path":"/spec/template/spec/containers/0/command","value":["sleep","3600"]}]'
+kubectl -n e2e-multi rollout status deployment/app --timeout=180s
+wait_local_matches e2e-multi
+run_in e2e-multi trigger || fail "trigger exited non-zero"
+expect 'msg="trigger match"'
+expect_not 'msg="trigger mismatch"'
+
+step "private registry: pull needs --pull-secret"
+AUTH_PORT=5002
+AUTH_NAME=kind-registry-auth
+PRIVATE="localhost:${AUTH_PORT}/e2e/private:latest"
+mkdir -p "${WORK}/auth" "${WORK}/docker"
+docker run --rm --entrypoint htpasswd httpd:2 -Bbn e2e secret >"${WORK}/auth/htpasswd"
+docker run -d --restart=always -p "127.0.0.1:${AUTH_PORT}:5000" --network bridge --name "$AUTH_NAME" \
+  -v "${WORK}/auth:/auth" -e REGISTRY_AUTH=htpasswd -e REGISTRY_AUTH_HTPASSWD_REALM=e2e \
+  -e REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd registry:2 >/dev/null
+trap 'docker rm -f "$AUTH_NAME" >/dev/null 2>&1 || true; cleanup' EXIT
+docker network connect kind "$AUTH_NAME"
+for node in $(kind get nodes --name "$CLUSTER"); do
+  docker exec "$node" mkdir -p "/etc/containerd/certs.d/localhost:${AUTH_PORT}"
+  printf '[host."http://%s:5000"]\n' "$AUTH_NAME" |
+    docker exec -i "$node" cp /dev/stdin "/etc/containerd/certs.d/localhost:${AUTH_PORT}/hosts.toml"
+done
+export DOCKER_CONFIG="${WORK}/docker" # where pinner (and docker) find the registry's credentials
+docker login "localhost:${AUTH_PORT}" -u e2e -p secret >/dev/null
+push_to "$PRIVATE" v1
+new_app e2e-private "$PRIVATE" 0
+kubectl -n e2e-private create secret docker-registry regcred \
+  --docker-server="localhost:${AUTH_PORT}" --docker-username=e2e --docker-password=secret
+
+# the registry answers pinner (credentials from DOCKER_CONFIG), but the node has no credentials to pull with
+if run_in e2e-private pull --pull-namespace e2e-private --pull-timeout 90s; then
+  fail "pull without --pull-secret must fail"
+fi
+expect 'msg="pull error".*state=not-pulled.*outcome=pull-failed'
+run_in e2e-private pull --pull-namespace e2e-private --pull-secret regcred || fail "pull with --pull-secret exited non-zero"
+expect 'msg="pull not-pulled".*outcome=pulled'
+expect 'msg="pull match".*via=pulling'
+kubectl -n e2e-private get pods -l app.kubernetes.io/managed-by=floatingtag-pinner -o name | grep -q . &&
+  fail "the pull Pods must be deleted after the pull"
 
 step "log options"
 run_pinner pull --log-level=warn || fail "pull exited non-zero"

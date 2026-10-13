@@ -479,11 +479,13 @@ internal/local/      ローカルキャッシュ（ノードのイメージス�
 
 - **単体テスト**: `go test ./...`。Kubernetes のクライアントを偽物（fake）に差し替えているので、クラスタは要らない。CI（`main` への push）で実行される。
 - **e2e テスト**（[test/e2e/run.sh](./test/e2e/run.sh)）: kind（本物の kubelet と containerd）と、CI の中のローカルレジストリで、
-  `pull`（`--dry-run`、状態の変化、ログのオプション）と `trigger` を、本物のクラスタで確かめる。
+  `pull`（`--dry-run`、状態の変化、ログのオプション）と `trigger`（`rollout`、`delete-pods`）に加えて、
+  `error`、`not-pulled`、`not-running`、コンテナが自分で再起動して `mismatch` が消える場合、マルチ arch のイメージ（index の digest）、
+  認証つきのレジストリ（`--pull-secret` あり・なし）を、本物のクラスタで確かめる。
   レジストリを自前で建てるので、タグを自由に動かせる（Docker Hub の rate limit にも依存しない）。
   - **いまはスキップされる**（[.github/workflows/e2e.yml](./.github/workflows/e2e.yml)）。リポジトリの変数 `RUN_E2E` を `true` にすると、
     `main` への push と pull request で動く。手動（Actions の `e2e` → Run workflow）でも、変数に関係なく実行できる。
-  - 手元でも実行できる（docker、kind、kubectl が必要）: `go build -o pinner ./cmd/pinner && test/e2e/run.sh "$PWD/pinner"`。
+  - 手元でも実行できる（docker、kind、kubectl、crane が必要）: `go build -o pinner ./cmd/pinner && test/e2e/run.sh "$PWD/pinner"`。
   - まだ一度も実行していない。最初の実行で、スクリプトや想定の誤りが見つかる可能性がある。
 
 ## ドキュメントのサイト

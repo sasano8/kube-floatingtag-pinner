@@ -283,8 +283,9 @@ internal/local/      ローカルキャッシュ（ノードのイメージス�
 README と `docs/`（コマンドライン、設計、調査）を、MkDocs（Material）で静的サイトにして、GitHub Pages に公開できる
 （[.github/workflows/docs.yml](./.github/workflows/docs.yml)。図は Mermaid のまま描画される）。
 
-- **いまはスキップされる**。GitHub Pages は、public のリポジトリ（または有料のプラン）が必要で、Pages の有効化（Settings → Pages → Source: GitHub Actions）も要るため。
-  リポジトリの変数 `PUBLISH_DOCS` を `true` にすると、`main` への push（README、`docs/`、`cmd/` などの変更）で公開される。手動（Actions の `docs` → Run workflow）でも実行できる。
+- `main` への push（README、`docs/`、`cmd/` などの変更）で、自動で公開される。手動（Actions の `docs` → Run workflow）でも実行できる。
+- **事前に 1 度だけ**、Pages を有効にする必要がある（Settings → Pages → Source: **GitHub Actions**）。GitHub Pages は、public のリポジトリ（または有料のプラン）が必要。
+  有効にしていないと、`docs` のワークフローの `deploy` が失敗する。
 - 手元で確かめる: `pip install mkdocs-material && scripts/prepare-docs-site.sh && mkdocs serve`（`docs/` には手を加えず、`.site-src/` に、README をホームにした入力を作る）。
 
 ## 既存ツールの対応状況

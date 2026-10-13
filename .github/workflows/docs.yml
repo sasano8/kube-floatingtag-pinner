@@ -4,9 +4,8 @@ name: docs
 # The command-line pages (docs/cli) are generated from the flag definitions and committed; a test
 # (TestCLIDocsAreUpToDate) fails when they are out of date.
 #
-# SKIPPED BY DEFAULT: GitHub Pages needs a public repository (or a paid plan), and Pages must be enabled
-# (Settings > Pages > Source: GitHub Actions). The jobs run only when the repository variable
-# PUBLISH_DOCS is "true", or when started by hand (Actions > docs > Run workflow).
+# Needs GitHub Pages to be enabled once (Settings > Pages > Source: GitHub Actions), which also needs
+# a public repository (or a paid plan). It can be started by hand too (Actions > docs > Run workflow).
 on:
   push:
     branches: [main]
@@ -22,7 +21,6 @@ concurrency:
 
 jobs:
   build:
-    if: ${{ vars.PUBLISH_DOCS == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

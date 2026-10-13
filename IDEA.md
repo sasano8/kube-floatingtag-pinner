@@ -84,9 +84,10 @@ image を書き換えないので、selfHeal との衝突は大きく減る。�
 
 ## 未確認事項
 
-- 既存ツールの調査結果は [docs/research/existing-tools.md](./docs/research/existing-tools.md) に移した（Keel は ksvc に使えない見込み、Knative 本体は `latest` に追従しない）。
+- 調査結果は [docs/research.md](./docs/research.md) に移した（Keel は ksvc に使えない見込み、Knative 本体は `latest` に追従しない、rate limit、Revision の削除）。
 - ksvc の `spec.template` に annotation を足したとき、新しい Revision ができ、そのとき `latest` が解決し直されること。
-- Revision を消すと Configuration が再作成するか（配信中は断が出うるので使わない方針）。
+- Revision を消すと Configuration が再作成するか → **調査済み: 最新の Revision は作り直される見込み**（ソースから。実機は未確認）。
+  ただし配信中は断が出うるので使わない方針は変えない（[docs/research.md](./docs/research.md) の「Revision を消すとどうなるか」）。
 
 ## 既存の関連物
 

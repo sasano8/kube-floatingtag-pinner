@@ -98,3 +98,23 @@ func TestTagDivergedAcrossNodesIsChanged(t *testing.T) {
 		t.Fatalf("%+v", r)
 	}
 }
+
+func TestDryRunDoesNotPull(t *testing.T) {
+	for _, have := range [][]string{nil, {"sha256:a"}} { // new, changed
+		loc := &fakeLocal{have: have}
+		c := &collector.Collector{
+			Source:   fakeSource{{Image: img}},
+			Registry: fakeRegistry{img: "sha256:b"},
+			Local:    loc,
+			OnNew:    collector.OnNewRegister,
+			DryRun:   true,
+		}
+		rs, err := c.CollectOnce(context.Background())
+		if err != nil || len(rs) != 1 {
+			t.Fatalf("%v %v", rs, err)
+		}
+		if r := rs[0]; !r.DryRun || r.Pulled || len(loc.pulledDig) != 0 {
+			t.Fatalf("have=%v: %+v pulled=%v", have, r, loc.pulledDig)
+		}
+	}
+}

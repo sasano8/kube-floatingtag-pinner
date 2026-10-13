@@ -27,15 +27,15 @@ import (
 const usage = `usage: pinner <command> [flags]
 
 commands:
-  sync   stage 1: sync the local cache (node image stores) with the remote registry
+  pull   stage 1: pull into the local cache (node image stores) what changed on the remote registry
 `
 
 func main() {
-	if len(os.Args) < 2 || os.Args[1] != "sync" {
+	if len(os.Args) < 2 || os.Args[1] != "pull" {
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
 	}
-	fs := flag.NewFlagSet("pinner sync", flag.ExitOnError)
+	fs := flag.NewFlagSet("pinner pull", flag.ExitOnError)
 	daemon := fs.Bool("daemon", false, "keep running: collect every --interval until stopped (default: collect once and exit)")
 	kubeconfig := fs.String("kubeconfig", "", "path to kubeconfig (default: in-cluster, then ~/.kube/config)")
 	namespace := fs.String("namespace", "", "namespace to watch (default: all)")
@@ -43,6 +43,7 @@ func main() {
 	onNew := fs.String("on-new", string(collector.OnNewRegister), "for images with no record: register|ignore")
 	floating := fs.String("floating-tags", "latest", "comma-separated tags to track; images with other tags are ignored (empty = all tags)")
 	localKind := fs.String("local", "node", "local registry: node (container runtime image store of the nodes)")
+	dryRun := fs.Bool("dry-run", false, "report what would be pulled, without pulling")
 	pullNS := fs.String("pull-namespace", "default", "namespace for the short-lived Pods that make nodes pull images")
 	pullSecret := fs.String("pull-secret", "", "imagePullSecret name (in --pull-namespace) for private registries")
 	pullTimeout := fs.Duration("pull-timeout", 2*time.Minute, "per-node timeout for a pull")
@@ -74,6 +75,7 @@ func main() {
 		Registry: registry.Remote{},
 		Local:    loc,
 		OnNew:    policy,
+		DryRun:   *dryRun,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -114,6 +116,8 @@ func pass(ctx context.Context, c *collector.Collector) bool {
 		case r.PullErr != nil:
 			ok = false
 			slog.Error(string(r.Status)+": pull failed", append(attrs, "err", r.PullErr)...)
+		case r.DryRun:
+			slog.Warn(string(r.Status)+" (dry-run: would pull)", attrs...)
 		case r.Status == collector.StatusChanged || r.Status == collector.StatusNew:
 			slog.Warn(string(r.Status), append(attrs, "pulled", r.Pulled)...)
 		default:

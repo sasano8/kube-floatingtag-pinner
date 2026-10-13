@@ -50,7 +50,7 @@ README の概要では触れていない、詳細寄りの設計と、**なぜ�
 | Kubernetes の API オブジェクト | spec には `image: x:latest` の文字列だけ | 例外: Pod の `status.containerStatuses[].imageID`、Revision の `status.containerStatuses[].imageDigest` |
 
 Knative は Revision の作成時に、タグを digest に解決して固定する。Revision は不変なので、`latest` に push しても
-既存の Revision は変わらない（実機で確認済み。[research/existing-tools.md](./research/existing-tools.md)）。
+既存の Revision は変わらない（実機で確認済み。[research.md](./research.md)）。
 
 ## 4. ローカルキャッシュ（`Local`）
 
@@ -136,7 +136,7 @@ kubelet に pull させるため、Ready な各ノードに、そのノード固
 ### 認証と名前空間
 
 - `--pull-namespace`（既定 `default`）に Pod を作る。非公開レジストリは `--pull-secret`（同じ名前空間の imagePullSecret）を使う。
-- リモートの digest 取得の認証は、既定のキーチェーン（`~/.docker/config.json` など）を使う。クラスタの中で動かす場合の認証は [未確認]。
+- リモートの digest 取得の認証は、既定のキーチェーン（`~/.docker/config.json` など）を使う。手元から動かす前提。
 
 ### 必要な権限
 
@@ -166,12 +166,12 @@ cmd/pinner  ──▶  internal/collector（収集と比較のロジック）
 
 - `collector` は 3 つの interface だけに依存する。実行形態（1 回実行、常駐、将来の operator）には依存しない。
   どれで動かすかは `cmd` の側で決める。
-- コマンドは**段階ごとに分ける**（`sync` = 第一段階、`apply` = 第二段階、`run` = 続けて両方）。
+- コマンドは**段階ごとに分ける**（`pull` = 第一段階、`apply` = 第二段階、`sync` = 続けて両方。名前は仮）。
   - 第一段階は読み取りと pull だけ、第二段階はアクションの実行（再デプロイなど）を伴う。**リスクも必要な権限も違う**ので、RBAC を分けられ、
-    第二段階を意図せず動かすこともない（`sync` だけでは何も変更しない）。
+    第二段階を意図せず動かすこともない（`pull` だけでは何も変更しない）。
   - 動かす間隔も別にできる（第一段階は頻繁に、第二段階はゆっくり、など）。
-  - 続けて動かしたいときのために、`run` で両方をこの順に行う。
-  - 現状は `sync` のみ実装。`apply` と `run` は第二段階と一緒に実装する。
+  - 続けて動かしたいときのために、`sync` で両方をこの順に行う。
+  - 現状は `pull` のみ実装。`apply` と `sync` は第二段階と一緒に実装する。
 - 実行形態は、どのコマンドでも既定が**1 回実行して終了**で、`--daemon`（と `--interval`）で常駐する。
   最初に必要なのは 1 回の実行で、繰り返しはその上に足せば済むため。
 - エラー: イメージごとの失敗は結果に載せて続行する。対象の一覧の取得に失敗したときだけ、その回を中断する。
@@ -233,10 +233,9 @@ selfHeal が差分として戻さないか。戻すなら `ignoreDifferences` �
 
 ## 9. 検討中のこと
 
-- **環境の安全装置**: 開発環境向けなので、本番で動かない仕組みがほしい。案は `--env` を必須にし、`--disabled-envs`
-  （既定 `prod,production,staging,stg`）に該当したら、起動時に終了する。方針は固まっていないため、未実装。
 - 結果の出力先の追加（Event、メトリクス。現状はログのみ）。
-- operator 化（controller-runtime）。
+- クラスタの中で動かす構成（CronJob / Deployment、RBAC、operator 化）は、いまは考えない。手元から `kubeconfig` で動かす前提。
+- pull 用 Pod の同時実行数の制限や、ワークロードが動いているノードだけを対象にすること（[research.md](./research.md) の rate limit の節）。
 
 ## 10. 実機で確認が必要な前提 [未確認]
 
@@ -249,7 +248,7 @@ selfHeal が差分として戻さないか。戻すなら `ignoreDifferences` �
    個別の digest を引いて比べる方式に切り替える。アーキごとの digest は取れるが、今は使っていない。
    タグ全体の digest は、どのアーキが変わっても変わるので、「タグが動いたか」の検知は、これで足りる。
 4. Knative: ksvc の `spec.template` への annotation で、新しい Revision ができ、タグが解決し直されること。
-5. レジストリ認証（非公開）と rate limit（Docker Hub の匿名アクセス）。
+5. 非公開レジストリでの認証（digest 取得と pull）。rate limit は [research.md](./research.md) のとおり、digest の取得は数えられない。
 6. `Node.status.images` が 1 ノード 50 件まで（kubelet の既定）のため、全ノードの和集合で見ても、載らないことがある。
 
 ## 用語

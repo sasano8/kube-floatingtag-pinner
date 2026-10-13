@@ -77,6 +77,7 @@ type Result struct {
 	Remote  string   // digest on the remote registry
 	Local   []string // digests the tag points to locally
 	Pulled  bool
+	DryRun  bool  // a pull was needed but skipped (Collector.DryRun)
 	PullErr error // set when a pull was attempted and failed
 	Err     error
 }
@@ -86,6 +87,9 @@ type Collector struct {
 	Registry Registry
 	Local    Local
 	OnNew    OnNew
+
+	// DryRun reports what would be pulled without pulling. Everything else is read-only anyway.
+	DryRun bool
 }
 
 // CollectOnce runs one pass. Per-image failures are reported in the results;
@@ -132,6 +136,10 @@ func (c *Collector) collect(ctx context.Context, t Target) Result {
 		r.Status = StatusChanged
 	}
 
+	if c.DryRun {
+		r.DryRun = true
+		return r
+	}
 	if err := c.Local.Pull(ctx, t.Image, remote); err != nil {
 		r.PullErr = err
 		return r

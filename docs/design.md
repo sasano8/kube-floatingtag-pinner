@@ -412,10 +412,11 @@ Knative は、Revision を作ると、そのときリモートに問い合わせ
 | envtest | 本物の `kube-apiserver` と `etcd` だけを起動する（kubelet もノードも無い） | 使わない。pull 用 Pod、`Node.status.images` は kubelet が無いと確かめられないため |
 | e2e | kind（本物の kubelet と containerd）と、CI の中のローカルレジストリ | `test/e2e/run.sh` と `.github/workflows/e2e.yml`。**スキップが既定**（変数 `RUN_E2E` か手動で実行）。未実行 |
 
-- e2e はローカルレジストリを使う: 同じタグに別の内容を 2 回 push すれば「リモートのタグが動いた」状況を作れる。rate limit、認証の影響も受けない。
+- e2e はローカルレジストリを使う: 同じタグに別の内容を 2 回 push すれば「リモートのタグが動いた」状況を作れる。rate limit の影響も受けない。認証が要る場合（`--pull-secret`）は、htpasswd 付きの 2 つ目のレジストリ（`localhost:5002`）を建てて確かめる。
   kind のノードの containerd に、`localhost:5001` をローカルレジストリへ向ける設定を入れる（kind の公式の手順）。
 - ノードの `status.images` の更新の遅れ（数分。pull のあとの状態を、pull 用 Pod が報告した digest から求める理由）は、kind でも再現されるはず。
   e2e は、ローカルの状態を読むステップの前に、`status.images` に反映されるまで待つ（`pull --dry-run` が `match` になるまで繰り返す）。
+- マルチ arch は、`crane copy busybox:1.36` で index をそのままローカルレジストリへ写して確かめる（タグの digest と、ノードが報告する digest が同じか）。
 - Knative（Revision の `imageDigest`）は、Knative Serving のインストールが重いので、e2e の対象外。単体テストのみ。
 
 ## 10. 実機で確認が必要な前提 [未確認]

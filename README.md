@@ -233,6 +233,59 @@ pinner collect              # kubeconfig のクラスタで、annotation の付�
 
    途中で、`--max-actions 1` を付けると、1 回の実行で依頼する数を 1 件に抑えられる。
 
+## Deployment での確認（`delete-pods`、`rollout`）
+
+アプリが落ちる（`CrashLoopBackOff`）と、kubelet が再起動するたびに、ノードのタグを拾い直してしまい、`mismatch` が自然に消える
+（`delete-pods` を試せない）。そこで、**落ちない専用のイメージ**を使う。`busybox` にラベルを足しただけの 2 つのイメージ（中身は同じで、digest だけが違う）を作り、
+タグ `latest` を、その間で付け替えて、「リモートのタグが動いた」状況を作る。
+
+**1. 専用イメージを作る**（`docker login ghcr.io` 済みで、手元が、動かすノードと同じアーキテクチャであること）
+
+```sh
+cd "$(mktemp -d)"
+for v in v1 v2; do
+  printf 'FROM busybox:1.36\nLABEL pinner.test=%s\n' "$v" > Dockerfile
+  docker build -q -t ghcr.io/sasano8/pinner-test:$v .
+  docker push ghcr.io/sasano8/pinner-test:$v
+done
+set_latest() { docker tag ghcr.io/sasano8/pinner-test:$1 ghcr.io/sasano8/pinner-test:latest && docker push ghcr.io/sasano8/pinner-test:latest; }
+set_latest v1
+```
+
+ghcr のパッケージは、初回は private なので、GitHub の Packages → `pinner-test` → Package settings → Change visibility → **Public** にする
+（private のままなら、imagePullSecret を作って、Deployment と `--pull-secret` に指定する）。
+
+**2. Deployment を作る**（`imagePullPolicy: IfNotPresent`。Pod が作り直されたときに、ノードのタグが使われることを確かめるため）
+
+```sh
+kubectl create namespace pinner-test
+kubectl -n pinner-test create deployment sleeper --image=ghcr.io/sasano8/pinner-test:latest --replicas=2 \
+  -- sh -c 'while true; do sleep 60; done'
+kubectl -n pinner-test patch deployment sleeper --type=json \
+  -p '[{"op":"add","path":"/spec/template/spec/containers/0/imagePullPolicy","value":"IfNotPresent"}]'
+kubectl -n pinner-test annotate deployment sleeper floatingtag-pinner/enabled=true
+```
+
+**3. 流れ**（ノードの一覧への反映は数分遅れるので、`match` / `mismatch` が期待どおりにならなければ、待ってやり直す。`--debug` で、何を読んだか分かる）
+
+```sh
+pinner pull --namespace pinner-test && pinner trigger --namespace pinner-test      # どちらも match
+set_latest v2
+pinner pull --namespace pinner-test              # pull mismatch → pull match（via=pulling）
+pinner trigger --debug --namespace pinner-test   # trigger mismatch（Pod は v1、ローカルは v2）
+
+kubectl -n pinner-test annotate deployment sleeper floatingtag-pinner/on-mismatch=delete-pods
+gen=$(kubectl -n pinner-test get deployment sleeper -o jsonpath='{.metadata.generation}')
+pinner trigger --dry-run --namespace pinner-test # would run action … delete-pods（何も変わらない）
+pinner trigger --namespace pinner-test           # action requested … delete-pods
+kubectl -n pinner-test get pods -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.containerStatuses[0].imageID}{"\n"}{end}'   # 新しい Pod は v2
+test "$(kubectl -n pinner-test get deployment sleeper -o jsonpath='{.metadata.generation}')" = "$gen" && echo "generation unchanged"
+pinner trigger --namespace pinner-test           # trigger match
+```
+
+`rollout` も同じ手順で試せる（`on-mismatch=rollout` にして、`set_latest v1` で付け替え、`pull`、`trigger`。Pod テンプレートに `floatingtag-pinner/restartedAt` が付き、ローリング更新になる）。
+片付け: `kubectl delete namespace pinner-test`。
+
 ## コマンド（仮）
 
 コマンドは段階ごとに分ける（段階ごとにリスクと必要な権限が違い、動かす間隔も別にできるため）。名前は仮で、再考の余地がある。
@@ -426,11 +479,13 @@ internal/local/      ローカルキャッシュ（ノードのイメージス�
 
 - **単体テスト**: `go test ./...`。Kubernetes のクライアントを偽物（fake）に差し替えているので、クラスタは要らない。CI（`main` への push）で実行される。
 - **e2e テスト**（[test/e2e/run.sh](./test/e2e/run.sh)）: kind（本物の kubelet と containerd）と、CI の中のローカルレジストリで、
-  `pull`（`--dry-run`、状態の変化、ログのオプション）と `trigger` を、本物のクラスタで確かめる。
+  `pull`（`--dry-run`、状態の変化、ログのオプション）と `trigger`（`rollout`、`delete-pods`）に加えて、
+  `error`、`not-pulled`、`not-running`、コンテナが自分で再起動して `mismatch` が消える場合、マルチ arch のイメージ（index の digest）、
+  認証つきのレジストリ（`--pull-secret` あり・なし）を、本物のクラスタで確かめる。
   レジストリを自前で建てるので、タグを自由に動かせる（Docker Hub の rate limit にも依存しない）。
   - **いまはスキップされる**（[.github/workflows/e2e.yml](./.github/workflows/e2e.yml)）。リポジトリの変数 `RUN_E2E` を `true` にすると、
     `main` への push と pull request で動く。手動（Actions の `e2e` → Run workflow）でも、変数に関係なく実行できる。
-  - 手元でも実行できる（docker、kind、kubectl が必要）: `go build -o pinner ./cmd/pinner && test/e2e/run.sh "$PWD/pinner"`。
+  - 手元でも実行できる（docker、kind、kubectl、crane が必要）: `go build -o pinner ./cmd/pinner && test/e2e/run.sh "$PWD/pinner"`。
   - まだ一度も実行していない。最初の実行で、スクリプトや想定の誤りが見つかる可能性がある。
 
 ## ドキュメントのサイト

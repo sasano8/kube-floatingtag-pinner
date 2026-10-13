@@ -18,7 +18,7 @@ jobs:
   e2e:
     if: ${{ vars.RUN_E2E == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -27,5 +27,6 @@ jobs:
       - uses: helm/kind-action@v1.10.0
         with:
           install_only: true # the script creates the cluster itself (it needs the registry wired in)
+      - run: go install github.com/google/go-containerregistry/cmd/crane@v0.22.1
       - run: go build -o pinner ./cmd/pinner
       - run: test/e2e/run.sh "$PWD/pinner"

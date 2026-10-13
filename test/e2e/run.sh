@@ -107,12 +107,29 @@ run_pinner trigger || fail "trigger exited non-zero"
 expect 'msg="trigger mismatch"'
 kubectl -n "$NS" get pods -o name | grep -q . || fail "trigger must not delete Pods"
 
-step "restart the Pod by hand; trigger -> match"
-kubectl -n "$NS" rollout restart deployment/app
+step "trigger --dry-run with on-mismatch=rollout: says what it would do, changes nothing"
+kubectl -n "$NS" annotate deployment app floatingtag-pinner/on-mismatch=rollout
+gen_before=$(kubectl -n "$NS" get deployment app -o jsonpath='{.metadata.generation}')
+run_pinner trigger --dry-run || fail "trigger --dry-run exited non-zero"
+expect 'dry-run: would run action.*action=rollout'
+[ "$(kubectl -n "$NS" get deployment app -o jsonpath='{.metadata.generation}')" = "$gen_before" ] ||
+  fail "a dry run must not change the Deployment"
+
+step "trigger with on-mismatch=rollout: a new rollout starts (only an annotation on the Pod template)"
+run_pinner trigger || fail "trigger exited non-zero"
+expect 'msg="trigger mismatch"'
+expect 'trigger action requested.*action=rollout'
+kubectl -n "$NS" get deployment app -o jsonpath='{.spec.template.metadata.annotations}' | grep -q 'floatingtag-pinner/restartedAt' ||
+  fail "the Pod template must carry the rollout annotation"
+[ "$(kubectl -n "$NS" get deployment app -o jsonpath='{.spec.template.spec.containers[0].image}')" = "$IMAGE" ] ||
+  fail "the image field must not be touched"
 kubectl -n "$NS" rollout status deployment/app --timeout=180s
+
+step "trigger again: the new Pod runs the local digest -> match, and nothing more is requested"
 run_pinner trigger || fail "trigger exited non-zero"
 expect 'msg="trigger match"'
 expect_not 'msg="trigger mismatch"'
+expect_not 'action requested'
 
 step "log options"
 run_pinner pull --log-level=warn || fail "pull exited non-zero"

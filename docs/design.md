@@ -194,9 +194,10 @@ Pod から取るのは「タグ」と「digest」の両方。タグはどのロ�
 - 検知（`internal/trigger` の `Detector`）: 実装済み。リソースの収集（`source.Kube.Resources`）、
   ノードごとのローカルのタグの digest（`local.Node.NodeTagDigests`）、実行中の digest（`source.KubeRunning`）を比べる。
   Pod はそのノードのタグと、Revision はローカル全体のタグと比べる。結果は `match` / `mismatch` / `not-pulled` / `not-running` / `error`。
-- アクター（`Actor`）とアクション: `none`（既定）だけ実装済み。アクション名が未実装のときは、エラーにする。
+- アクター（`Actor`）とアクション: `none`（既定）と `rollout` が実装済み（`internal/action`）。アクション名が未実装のときは、エラーにする。
+  同じ状態への繰り返しの回避と、`--max-actions` も `Actor` にある（下の「アクター」の節）。
 - `trigger --dry-run`: 実装済み。アクションを実行せず、どのアクションが実行されるはずだったかをログに出す。
-- 未実装: `delete-pods`、`restart`、`new-revision`、`sync`（pull → trigger）。
+- 未実装: `delete-pods`、`sync`（pull → trigger）。
 - 実機では未確認。
 
 ### ログ（状態とログレベル）
@@ -245,7 +246,7 @@ Pod から取るのは「タグ」と「digest」の両方。タグはどのロ�
   - `match` と `not-running` には結び付けない（何もしない）。
   - どれも未指定なら `none`（何もしない）。**`on-not-pulled` は `on-mismatch` を引き継がない。** `not-pulled` は比べる相手が無く、
     何を直すのか分からないため。たとえば Knative は、Revision の Pod が digest で pull するのでノードにタグが付かず、
-    `not-pulled` のままになりうる。`new-revision` を引き継ぐと、`--daemon` の周期ごとに新しい Revision を作り続ける。
+    `not-pulled` のままになりうる。`rollout` を引き継ぐと、`--daemon` の周期ごとに新しい Revision を作り続ける。
     対処は、アクションではなく、第一段階の `pull`（pinner 駆動の pull）。
   - 「誰が pull するか」（第一段階: `pull` を使う＝pinner 駆動、使わず Pod の起動に任せる＝Pod 駆動）と、
     「違いを見つけたとき何をするか」（第二段階: このアクション）は、別の軸。
@@ -263,17 +264,37 @@ Pod から取るのは「タグ」と「digest」の両方。タグはどのロ�
   アクションを足しても、検知は変わらない。
   ログ以外（Event の作成、通知など）も、後から足せる。
 
-組み込みの予定（いずれも、spec の image は書き換えない。**最小の操作で、pull が起こるきっかけを作る**）:
+組み込み（いずれも、spec の image は書き換えない。**最小の操作で、pull が起こるきっかけを作る**）:
 
-| アクション | 対象 | 操作 | spec への影響 |
-| --- | --- | --- | --- |
-| `none`（既定） | すべて | 何もしない（見つけたことは、ログに出る） | 無し |
-| `delete-pods` | Deployment / StatefulSet / DaemonSet | ローカルと違う Pod を削除する（ReplicaSet 等が作り直す） | 無し |
-| `restart` | Deployment / StatefulSet / DaemonSet | Pod テンプレートに `restartedAt` の annotation を付けて、段階的に入れ替える | annotation を 1 つ足す |
-| `new-revision` | Knative Service | ksvc の `spec.template` に annotation を足し、新しい Revision を作る | annotation を 1 つ足す |
+| アクション | 状態 | 対象 | 操作 | spec への影響 |
+| --- | --- | --- | --- | --- |
+| `none`（既定） | 実装済み | すべて | 何もしない（見つけたことは、ログに出る） | 無し |
+| `rollout` | 実装済み・実機は未確認 | Deployment / StatefulSet / DaemonSet / Knative Service | Pod テンプレートに annotation を足して、新しい世代を出す | annotation を 1 つ足す |
+| `delete-pods` | 未実装 | Deployment / StatefulSet / DaemonSet | ローカルと違う Pod を削除する（ReplicaSet 等が作り直す） | 無し |
 
-Knative で Pod を消しても意味がないのは、Revision の Pod が解決済みの digest で固定されているため（同じ旧いイメージで作り直される）。
-新しい Revision を作ると、そのときタグが解決し直される。このとき解決するのは、ローカルではなくリモートへの問い合わせ。
+**アクションは「意図」で名付け、種類ごとの違いは、対象の処理に持たせる。**
+Deployment 等の「ローリング更新」と、Knative の「新しい Revision」は、どちらもテンプレートの annotation を 1 つ変える同じ操作
+（`spec.template.metadata.annotations` を JSON merge patch する）で、対象の種類（API の種類）が違うだけ。
+そこで、`restart` と `new-revision` を別のアクションにせず、`rollout`（新しい世代を出す）にまとめた。
+`delete-pods` は、Knative には対応しない（`Supports(kind)` が、対応しない組み合わせをエラーにする）。
+
+- annotation の key は `floatingtag-pinner/restartedAt`（値は UTC の時刻、秒単位）。`kubectl rollout restart` の
+  `kubectl.kubernetes.io/restartedAt` とは別にして、kubectl との衝突を避ける。
+  同じ resource の 2 つの finding（たとえば 2 つの image）が同じ秒に patch しても、同じ値なので、2 回目は何も変えず、rollout は 1 回で済む。
+- field manager は `floatingtag-pinner`。managedFields に残るので、Argo CD の `ignoreDifferences`（`managedFieldsManagers`）で無視できる。
+- 実装は `internal/action`。`kind → API resource` の対応は、`source` と共通（`source.ResourceFor`）。
+
+### アクター（繰り返しの回避と上限）
+
+`Actor` は、アクションを実行する前に、次の 2 つを見る。
+
+- **同じ状態には 1 回だけ依頼する**: key は（リソース、イメージ、状態、アクション、ローカルの digest）。プロセスのメモリ上に持つ。
+  `rollout` したあとも、リソースがしばらく（または、ずっと）ローカルと違うことがある。毎回依頼すると、`--daemon` で、周期ごとに rollout し続ける。
+  ローカルの digest が変われば、別の状態なので、また依頼する。プロセスを再起動すると、忘れる。`--dry-run` は、数えない。
+- **`--max-actions`**: 1 回の実行（pass）で依頼する数の上限（0 = 上限なし）。次の pass では、また 0 から数える。
+
+Knative は、Revision を作ると、そのときリモートに問い合わせてタグを解決する（ローカルではない）。
+そのため、`rollout` で作られた Revision の digest は、ローカルのタグと、通常は一致する（`pull` のあと）。
 
 ### 採らなかった案: spec の image に digest を書く（`repo:latest@sha256:…`）
 

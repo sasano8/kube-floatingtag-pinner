@@ -156,3 +156,62 @@ func TestErrorFindingGoesToNoneByDefault(t *testing.T) {
 		t.Fatalf("%v %d", err, len(none.got))
 	}
 }
+
+func mismatch(name string, local ...string) trigger.Finding {
+	return trigger.Finding{
+		Resource: trigger.Resource{Kind: "Deployment", Name: name, Actions: map[string]string{"mismatch": "other"}},
+		Image:    img, Status: trigger.StatusMismatch, Local: local, Mismatches: []trigger.Mismatch{{}},
+	}
+}
+
+func TestActionIsRequestedOncePerLocalState(t *testing.T) {
+	none, other := &recorder{name: "none"}, &recorder{name: "other"}
+	a := trigger.NewActor(none, other)
+	ctx := context.Background()
+	a.BeginPass()
+	for range 3 { // three passes of a daemon: the resource still differs
+		if err := a.Act(ctx, mismatch("web", "sha256:B")); err != nil {
+			t.Fatal(err)
+		}
+		a.BeginPass()
+	}
+	if len(other.got) != 1 {
+		t.Fatalf("asked %d times for the same local state", len(other.got))
+	}
+	if err := a.Act(ctx, mismatch("web", "sha256:C")); err != nil || len(other.got) != 2 {
+		t.Fatalf("a new local digest is a new state: %v %d", err, len(other.got))
+	}
+	if err := a.Act(ctx, mismatch("api", "sha256:C")); err != nil || len(other.got) != 3 {
+		t.Fatalf("another resource is asked separately: %v %d", err, len(other.got))
+	}
+}
+
+func TestDryRunIsNotRemembered(t *testing.T) {
+	other := &recorder{name: "other"}
+	a := trigger.NewActor(&recorder{name: "none"}, other)
+	a.DryRun = true
+	a.Act(context.Background(), mismatch("web", "sha256:B"))
+	a.DryRun = false
+	if err := a.Act(context.Background(), mismatch("web", "sha256:B")); err != nil || len(other.got) != 1 {
+		t.Fatalf("a dry run must not use up the request: %v %d", err, len(other.got))
+	}
+}
+
+func TestMaxActionsCapsAPass(t *testing.T) {
+	other := &recorder{name: "other"}
+	a := trigger.NewActor(&recorder{name: "none"}, other)
+	a.MaxActions = 2
+	ctx := context.Background()
+	a.BeginPass()
+	for _, n := range []string{"a", "b", "c"} {
+		a.Act(ctx, mismatch(n, "sha256:B"))
+	}
+	if len(other.got) != 2 {
+		t.Fatalf("cap of 2: asked %d", len(other.got))
+	}
+	a.BeginPass() // the next pass counts from zero, and the skipped one was not remembered
+	a.Act(ctx, mismatch("c", "sha256:B"))
+	if len(other.got) != 3 {
+		t.Fatalf("asked %d", len(other.got))
+	}
+}

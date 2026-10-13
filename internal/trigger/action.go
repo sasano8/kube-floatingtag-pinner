@@ -36,7 +36,16 @@ type Actor struct {
 	actions map[string]Action
 	// DryRun runs no action: it only logs which action would have run.
 	DryRun bool
+	// MaxActions caps the actions requested per pass (0 = no cap), to limit the damage of a mistake.
+	MaxActions int
+
+	requested map[string]bool // already asked for this local state: not asked again
+	count     int
 }
+
+// BeginPass starts a new pass: the per-pass cap counts from zero.
+// What was already requested is remembered across passes (for the life of the process).
+func (a *Actor) BeginPass() { a.count = 0 }
 
 func NewActor(actions ...Action) *Actor {
 	a := &Actor{actions: map[string]Action{}}
@@ -57,6 +66,28 @@ func (a *Actor) Act(ctx context.Context, f Finding) error {
 	}
 	if !ac.Supports(f.Kind) {
 		return fmt.Errorf("%s: action %q does not support %s", f.Resource, name, f.Kind)
+	}
+	if name != DefaultAction {
+		// The same action for the same local state is asked for once. After a rollout the resource may
+		// still differ for a while (or for good); asking again every pass would roll it out forever.
+		key := fmt.Sprintf("%s|%s|%s|%s|%v", f.Resource, f.Image, f.Status, name, f.Local)
+		if a.requested[key] {
+			slog.Debug("trigger action skipped: already requested for this local state",
+				"resource", f.Resource.String(), "image", f.Image, "action", name)
+			return nil
+		}
+		if a.MaxActions > 0 && a.count >= a.MaxActions {
+			slog.Warn("trigger action skipped: --max-actions reached for this pass",
+				"resource", f.Resource.String(), "image", f.Image, "action", name)
+			return nil
+		}
+		if !a.DryRun {
+			if a.requested == nil {
+				a.requested = map[string]bool{}
+			}
+			a.requested[key] = true
+			a.count++
+		}
 	}
 	if a.DryRun && name != DefaultAction {
 		slog.Info("trigger dry-run: would run action", "resource", f.Resource.String(), "image", f.Image,

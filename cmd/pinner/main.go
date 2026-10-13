@@ -20,6 +20,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/sasano8/kube-floatingtag-pinner/internal/action"
 	"github.com/sasano8/kube-floatingtag-pinner/internal/collector"
 	"github.com/sasano8/kube-floatingtag-pinner/internal/local"
 	"github.com/sasano8/kube-floatingtag-pinner/internal/registry"
@@ -137,6 +138,7 @@ func setupPull(args []string) job {
 func setupTrigger(args []string) job {
 	fs := flag.NewFlagSet("pinner trigger", flag.ExitOnError)
 	c := registerCommon(fs, "run no action: log which action would have run")
+	maxActions := fs.Int("max-actions", 0, "most actions to request per pass (0 = no cap)")
 	fs.Parse(args)
 	rep := setupLogging(c, "trigger", report.Match, report.Mismatch, report.NotPulled, report.NotRunning, report.Error)
 
@@ -146,8 +148,9 @@ func setupTrigger(args []string) job {
 		Local:   newLocal(*c.localKind, &local.Node{Client: client}),
 		Running: &source.KubeRunning{Client: client},
 	}
-	actor := trigger.NewActor(trigger.None{})
+	actor := trigger.NewActor(trigger.None{}, action.Rollout{Client: client})
 	actor.DryRun = *c.dryRun
+	actor.MaxActions = *maxActions
 	return job{pass: func(ctx context.Context) bool { return triggerPass(ctx, det, actor, rep) }, daemon: *c.daemon, interval: *c.interval}
 }
 
@@ -245,6 +248,7 @@ func triggerPass(ctx context.Context, d *trigger.Detector, actor *trigger.Actor,
 		slog.Error(rep.Msg("detect failed"), "err", err)
 		return false
 	}
+	actor.BeginPass()
 	ok := true
 	for _, f := range findings {
 		attrs := []any{"resource", f.Resource.String(), "image", f.Image}

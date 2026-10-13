@@ -84,9 +84,9 @@ digest だけでタグが付いていないものは見ない（使われると�
 
 | ローカルの TagDigests | 判定 |
 | --- | --- |
-| リモートの digest ひとつだけ | `unchanged` |
-| 空（そのタグを持つノードが無い） | `new`（`--on-new` に従う） |
-| それ以外（別の digest、ノード間で食い違い含む） | `changed` → pull で同期 |
+| リモートの digest ひとつだけ | `match` |
+| 空（そのタグを持つノードが無い） | `not-pulled`（`--on-new` に従う） |
+| それ以外（別の digest、ノード間で食い違い含む） | `mismatch` → pull で同期 |
 
 ### `--on-new`
 
@@ -178,7 +178,7 @@ cmd/pinner  ──▶  internal/collector（収集と比較のロジック）
   1 回実行では、どれか 1 つでも失敗があれば終了コードは非 0。
 - リモートの digest は `remote.Head` で取る（イメージ本体は落とさない）。
 
-## 8. 第二段階の設計 [検知と `info` / `none` は実装済み。ほかのアクションは未実装]
+## 8. 第二段階の設計 [検知と `none` は実装済み。ほかのアクションは未実装]
 
 ### 比較
 
@@ -194,10 +194,30 @@ Pod から取るのは「タグ」と「digest」の両方。タグはどのロ�
 - 検知（`internal/trigger` の `Detector`）: 実装済み。リソースの収集（`source.Kube.Resources`）、
   ノードごとのローカルのタグの digest（`local.Node.NodeTagDigests`）、実行中の digest（`source.KubeRunning`）を比べる。
   Pod はそのノードのタグと、Revision はローカル全体のタグと比べる。結果は `match` / `mismatch` / `not-pulled` / `not-running` / `error`。
-- アクター（`Actor`）とアクション: `info`（既定）と `none` だけ実装済み。アクション名が未実装のときは、エラーにする。
-- `trigger --dry-run`: 実装済み。どのアクションも `info` として扱う。
+- アクター（`Actor`）とアクション: `none`（既定）だけ実装済み。アクション名が未実装のときは、エラーにする。
+- `trigger --dry-run`: 実装済み。アクションを実行せず、どのアクションが実行されるはずだったかをログに出す。
 - 未実装: `delete-pods`、`restart`、`new-revision`、`sync`（pull → trigger）。
 - 実機では未確認。
+
+### ログ（イベントとログレベル）
+
+`pull` も `trigger` も、見つけたことを、同じ名前の**イベント**で報告する。比べる相手だけが違う。
+
+| イベント | 第一段階（リモート ⇔ ローカル） | 第二段階（ローカル ⇔ 実行中） | ログレベル |
+| --- | --- | --- | --- |
+| `match` | 一致 | 一致 | INFO |
+| `mismatch` | 違う（新旧は分からない） | 違う（新旧は分からない） | WARN |
+| `not-pulled` | ローカルがタグを持っていない | 同じ | WARN |
+| `not-running` | （なし） | 比べる相手が無い | INFO |
+| `error` | 失敗 | 失敗 | ERROR |
+
+- ログレベルは、イベントごとに**固定**で、第一段階と第二段階で同じ考え方（何もすることがない = INFO、違いがある = WARN、失敗 = ERROR）。
+  イベントの名前を共有したので、`--log-level` と `--log-events` の意味が、両方で同じになる。
+- 第一段階の旧名（`unchanged` / `changed` / `new` / `ignored`）は、`match` / `mismatch` / `not-pulled` に統一した。
+  `new` と `not-pulled` は同じ状況（ローカルがそのタグを持っていない）。`pull` が違いに対してしたこと（pull した、しなかった、
+  `--dry-run` で pull が必要だった）は、イベントではなく、ログの `outcome` に出す。
+- `--log-level`（下限）と `--log-events`（出すイベント）で、実行時に絞る。そのコマンドが出さないイベントの指定は、起動時にエラー。
+- 実装は `internal/report` の 1 か所（イベント → ログレベル、絞り込み）。コマンドは、それを使って報告する。
 
 ### アクター（Actor）とアクション（Action）
 
@@ -209,9 +229,9 @@ Pod から取るのは「タグ」と「digest」の両方。タグはどのロ�
 - アクションは、**イベント**（`trigger` のステータス）ごとに、リソースの annotation で指定する。
   - `floatingtag-pinner/on-mismatch: <名前>`: ローカルと違うとき。**ふつうは、これだけ指定すればよい**。
   - `floatingtag-pinner/on-not-pulled: <名前>`: ローカルキャッシュがタグを持っていないとき（任意）。
-  - `floatingtag-pinner/on-error: <名前>`: 比較の途中で失敗したとき（任意）。`info` は理由をログに出す。終了コードは、アクションにかかわらず非 0。
+  - `floatingtag-pinner/on-error: <名前>`: 比較の途中で失敗したとき（任意）。終了コードは、アクションにかかわらず非 0。
   - `match` と `not-running` には結び付けない（何もしない）。
-  - どちらも未指定なら `info`。**`on-not-pulled` は `on-mismatch` を引き継がない。** `not-pulled` は比べる相手が無く、
+  - どれも未指定なら `none`（何もしない）。**`on-not-pulled` は `on-mismatch` を引き継がない。** `not-pulled` は比べる相手が無く、
     何を直すのか分からないため。たとえば Knative は、Revision の Pod が digest で pull するのでノードにタグが付かず、
     `not-pulled` のままになりうる。`new-revision` を引き継ぐと、`--daemon` の周期ごとに新しい Revision を作り続ける。
     対処は、アクションではなく、第一段階の `pull`（pinner 駆動の pull）。
@@ -220,9 +240,12 @@ Pod から取るのは「タグ」と「digest」の両方。タグはどのロ�
   - 今後、`not-running` などにも結び付けられるようにする余地はあるが、いまは `mismatch`、`not-pulled`、`error` だけ。
   - Go のエラーにはスタックトレースが付かない。代わりに、各層でエラーに文脈を足している（`local: …`、`running: …` など）。
     スタックトレースが要る場合は、`--debug` のようなフラグで後から足せる。
-- **未指定は `info`（差分をログに出すだけ）**。ユーザーの管轄のものには、頼まれない限り触らない。
-  リソースに手を入れずに、検知できているかを確かめる手段にもなる。`none` は、検知した結果にも何もしない（ログも出さない）。
-- `trigger --dry-run`（予定）は、どのアクションも `info` として扱うスイッチ。`info` はリソース単位、`--dry-run` は全体の指定。
+- **ログ（報告）とアクション（作用）は別のもの。** 見つけたことは、アクションと関係なく、常にすべて報告する（`internal/report`）。
+  出す範囲は、実行時のオプションで絞る（`--log-level`、`--log-events`。次節）。アクションは、リソースに何かをするものだけ。
+  最初は `info` というアクションを置いていたが、「報告すること」と「作用すること」が混ざるので、やめた。
+- **既定は `none`（何もしない）**。ユーザーの管轄のものには、頼まれない限り触らない。見つけたことはログに出るので、
+  リソースに手を入れずに、検知できているかを確かめられる。
+- `trigger --dry-run` は、アクションを実行せず、どのアクションが実行されるはずだったかをログに出す。ログ自体は常に出ている。
 - アクションは、対象の種類ごとに適用できるものが決まっている。適用できない組み合わせは、エラーにする。
 - 実装は、`Action`（種類に適用できるかの判定と、実行）の interface の裏に置き、`Actor` が annotation で指定された `Action` を選んで実行する。
   アクションを足しても、検知は変わらない。
@@ -232,8 +255,7 @@ Pod から取るのは「タグ」と「digest」の両方。タグはどのロ�
 
 | アクション | 対象 | 操作 | spec への影響 |
 | --- | --- | --- | --- |
-| `none` | すべて | 何もしない | 無し |
-| `info`（既定） | すべて | 差分があることをログに出す | 無し |
+| `none`（既定） | すべて | 何もしない（見つけたことは、ログに出る） | 無し |
 | `delete-pods` | Deployment / StatefulSet / DaemonSet | ローカルと違う Pod を削除する（ReplicaSet 等が作り直す） | 無し |
 | `restart` | Deployment / StatefulSet / DaemonSet | Pod テンプレートに `restartedAt` の annotation を付けて、段階的に入れ替える | annotation を 1 つ足す |
 | `new-revision` | Knative Service | ksvc の `spec.template` に annotation を足し、新しい Revision を作る | annotation を 1 つ足す |

@@ -8,11 +8,12 @@ import (
 	"strings"
 )
 
-// DefaultAction is used when a resource names no action for an event: it only reports.
-const DefaultAction = "info"
+// DefaultAction is used when a resource names no action for an event: nothing is done.
+// (Every finding is logged anyway; see internal/report.)
+const DefaultAction = "none"
 
 // ActedOn are the events an action can be bound to (annotation on-<event>).
-// Only mismatch is the one most users need; not-pulled and error are optional and also default to info,
+// Only mismatch is the one most users need; not-pulled and error are optional and also default to none,
 // never to the mismatch action: with nothing to compare, acting blindly could repeat every pass.
 var ActedOn = []Status{StatusMismatch, StatusNotPulled, StatusError}
 
@@ -23,35 +24,7 @@ type Action interface {
 	Do(ctx context.Context, f Finding) error
 }
 
-// Info logs that what runs differs from the local cache. It changes nothing.
-type Info struct{}
-
-func (Info) Name() string         { return "info" }
-func (Info) Supports(string) bool { return true }
-func (Info) Do(_ context.Context, f Finding) error {
-	if f.Status == StatusError {
-		slog.Error("error", "resource", f.Resource.String(), "image", f.Image, "err", f.Err)
-		return nil
-	}
-	if f.Status == StatusNotPulled {
-		slog.Warn("not-pulled", "resource", f.Resource.String(), "image", f.Image,
-			"hint", "the local cache does not hold this tag (run pull first)")
-		return nil
-	}
-	var running []string
-	for _, s := range f.Mismatches {
-		who := s.Pod
-		if who == "" {
-			who = "revision"
-		}
-		running = append(running, fmt.Sprintf("%s=%s", who, s.Digest))
-	}
-	slog.Warn("mismatch", "resource", f.Resource.String(), "image", f.Image,
-		"running", strings.Join(running, ","), "local", f.Mismatches[0].Want)
-	return nil
-}
-
-// None does nothing at all.
+// None does nothing to the resource. Findings are reported by internal/report regardless.
 type None struct{}
 
 func (None) Name() string                      { return "none" }
@@ -61,8 +34,8 @@ func (None) Do(context.Context, Finding) error { return nil }
 // Actor picks the action a resource names and runs it on its mismatch findings.
 type Actor struct {
 	actions map[string]Action
-	// ForceInfo runs every action as info (a dry run for the whole pass).
-	ForceInfo bool
+	// DryRun runs no action: it only logs which action would have run.
+	DryRun bool
 }
 
 func NewActor(actions ...Action) *Actor {
@@ -75,7 +48,7 @@ func NewActor(actions ...Action) *Actor {
 
 func (a *Actor) Act(ctx context.Context, f Finding) error {
 	name := f.Actions[string(f.Status)]
-	if name == "" || a.ForceInfo {
+	if name == "" {
 		name = DefaultAction
 	}
 	ac, ok := a.actions[name]
@@ -84,6 +57,11 @@ func (a *Actor) Act(ctx context.Context, f Finding) error {
 	}
 	if !ac.Supports(f.Kind) {
 		return fmt.Errorf("%s: action %q does not support %s", f.Resource, name, f.Kind)
+	}
+	if a.DryRun && name != DefaultAction {
+		slog.Info("dry-run: would run action", "resource", f.Resource.String(), "image", f.Image,
+			"event", string(f.Status), "action", name)
+		return nil
 	}
 	return ac.Do(ctx, f)
 }

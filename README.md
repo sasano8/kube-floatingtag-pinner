@@ -25,7 +25,7 @@
 | ローカルキャッシュ | Kubernetes が pull して各ノードに保持しているイメージ（containerd 等のイメージストア）。Harbor のようなレジストリを建てるものではない。同期先に任意のレジストリを使う形も将来は想定 | ○ | ○ |
 | Kubernetes リソース | 所定の annotation が付いた Deployment / StatefulSet / DaemonSet / Knative Service。参照元 | ○ | ○ |
 | コレクター | 第一段階: リソースからイメージを収集し、リモートレジストリとローカルキャッシュを比較、差分があれば pull。第二段階: ローカルキャッシュの digest と、実行中の Pod / Revision の digest を比較し、差分を検知 | ○ | ○ |
-| アクター（Actor） | 検知した差分に対して、リソースの annotation で指定されたアクション（Action）を実行する。組み込みは再デプロイにつながるもの（Deployment 等は Pod の削除や再ロールアウト、Knative は新 Revision の作成）。`info` は差分をログに出すだけ、`none` は何もしない | | ○ |
+| アクター（Actor） | 検知した差分に対して、リソースの annotation で指定されたアクション（Action）を実行する。組み込みは再デプロイにつながるもの（Deployment 等は Pod の削除や再ロールアウト、Knative は新 Revision の作成）。`none`（既定）は何もしない（見つけたことはログに出る） | | ○ |
 
 > 第二段階ではリモートレジストリとの直接のやり取りは行わない。ローカルキャッシュの digest と、実行中の Pod の `imageID`（Knative は Revision の `imageDigest`）を比べ、不一致ならアクションを実行する。
 > spec の image は書き換えない。
@@ -100,26 +100,49 @@ digest を別に記録することはしない（正本はリモートのレジ�
 | コマンド | 内容 | 状態 |
 | --- | --- | --- |
 | `pinner pull` | 第一段階: リモートで変わったイメージを、ローカルキャッシュに pull する | 実装済み |
-| `pinner trigger` | 第二段階: ローカルを正に、実行中のものが古ければ、指定のアクションを引き起こす（結果はアクション次第で、保証しない） | 検知と `info` / `none` のみ実装済み |
+| `pinner trigger` | 第二段階: ローカルを正に、実行中のものがローカルと違えば、指定のアクションを引き起こす（結果はアクション次第で、保証しない） | 検知と `none` のみ実装済み |
 | `pinner sync` | `pull` → `trigger` を続けて行う | 未実装 |
 
 どのコマンドも、既定は 1 回実行して終了。`--daemon`（と `--interval`）で常駐して繰り返す。
 第二段階はアクション（将来は Pod の削除など）の実行を伴うので、`pull` だけでは動かない。第二段階まで行うときは、`trigger` か `sync` を明示する。
-現状の `trigger` のアクションは `info`（差分をログに出す。既定）と `none`（何もしない）だけで、リソースには何も変更しない。
-`delete-pods` などは未実装で、指定するとエラーになる。
-アクションは、リソースの annotation で、イベント（`trigger` のステータス）ごとに指定する。
+アクション（`trigger` がリソースにすること）は、ログ（報告）とは別のもの。
+
+- **ログ**: 見つけたことは、アクションと関係なく、常にすべて報告する。出す範囲は実行時のオプションで絞る（下の「ログ」）。
+- **アクション**: リソースに何かをするもの。リソースの annotation で、イベントごとに指定する。**既定は `none`（何もしない）**。
+  現状のアクションは `none` だけで、`delete-pods` などは未実装（指定するとエラーになる）。つまり、いまの `trigger` はリソースに何も変更しない。
 
 | annotation | 意味 | 既定 |
 | --- | --- | --- |
-| `floatingtag-pinner/on-mismatch` | ローカルと違うときのアクション。**ふつうは、これだけ指定すればよい** | `info` |
-| `floatingtag-pinner/on-not-pulled` | ローカルキャッシュがタグを持っていないときのアクション（任意） | `info` |
-| `floatingtag-pinner/on-error` | 比較の途中で失敗したときのアクション（任意） | `info` |
+| `floatingtag-pinner/on-mismatch` | ローカルと違うときのアクション。**ふつうは、これだけ指定すればよい** | `none` |
+| `floatingtag-pinner/on-not-pulled` | ローカルキャッシュがタグを持っていないときのアクション（任意） | `none` |
+| `floatingtag-pinner/on-error` | 比較の途中で失敗したときのアクション（任意） | `none` |
 
-- `match` と `not-running` には、アクションを結び付けない（何もしない。INFO のログだけ）。
-- `error` は、アクションにかかわらず、終了コードが非 0 になる。`info` は、失敗の理由（エラーの文字列）をログに出す。
-- `on-not-pulled` は `on-mismatch` を引き継がず、既定は `info`。比べる相手が無いので、何かを実行し続ける恐れがあるため
+- `match` と `not-running` には、アクションを結び付けない。
+- `error` は、アクションにかかわらず、終了コードが非 0 になる。
+- `on-not-pulled` は `on-mismatch` を引き継がない。比べる相手が無いので、何かを実行し続ける恐れがあるため
   （たとえば Knative は、Revision の Pod が digest で pull するので、ノードにタグが付かず、`not-pulled` のままになりうる）。
-- アクション: `info`（ログに出すだけ）、`none`（何もしない）。ほかは未実装。
+- `trigger --dry-run` は、アクションを実行せず、どのアクションが実行されるはずだったかをログに出す。
+
+### ログ
+
+`pull` も `trigger` も、見つけたことを、次の**イベント**として報告する。名前は両方で共通。比べる相手だけが違う。
+
+| イベント | 第一段階（`pull`）: リモート ⇔ ローカル | 第二段階（`trigger`）: ローカル ⇔ 実行中 | ログレベル |
+| --- | --- | --- | --- |
+| `match` | ローカルのタグがリモートと同じ digest | 実行中の digest がローカルのタグと同じ | INFO |
+| `mismatch` | ローカルのタグがリモートと違う digest（新旧は分からない） | 実行中の digest がローカルのタグと違う（新旧は分からない） | WARN |
+| `not-pulled` | ローカルがそのタグを持っていない | 同じ | WARN |
+| `not-running` | （なし） | 比べる相手（実行中の Pod / Revision の digest）が無い | INFO |
+| `error` | 失敗（認証、タイムアウトなど） | 失敗（権限、取得の失敗など） | ERROR |
+
+ログレベルは、イベントごとに固定（何もすることがない = INFO、違いがある = WARN、失敗 = ERROR）。
+
+| オプション | 内容 | 既定 |
+| --- | --- | --- |
+| `--log-level` | ログレベルの下限（`debug` / `info` / `warn` / `error`） | `info` |
+| `--log-events` | ログに出すイベント（カンマ区切り。例: `mismatch,not-pulled,error`）。そのコマンドが出さないイベントを指定するとエラー | すべて |
+
+`--daemon` で `match` が毎回出てうるさいときは、`--log-level=warn` か `--log-events=mismatch,not-pulled,error` で絞れる。
 
 ## インストール
 
@@ -181,7 +204,7 @@ CI は、あわせて `ghcr.io/sasano8/kube-floatingtag-pinner`（amd64 / arm64 
    ./pinner pull --dry-run --namespace app-authorization-demo   # Windows は pinner.exe
    ```
 
-   `changed (dry-run: would pull)` と出れば、ローカルのタグがリモートと違う。リモートの digest（`remote=`）と、ローカル（`local=`）を見比べる。
+   `mismatch` に `outcome=would-pull` と出れば、ローカルのタグがリモートと違い、pull が必要。リモートの digest（`remote=`）と、ローカル（`local=`）を見比べる。
 
 3. 実際に pull する。
 
@@ -198,7 +221,7 @@ CI は、あわせて `ghcr.io/sasano8/kube-floatingtag-pinner`（amd64 / arm64 
    ```
 
    `repo:latest` と同じエントリに、リモートの digest（`repo@sha256:…`）が載っていれば成功。
-   もう一度 `pull` を実行すると、`unchanged` になる。
+   もう一度 `pull` を実行すると、`match` になる。
 
 5. 動いているものが、ローカルと違うかを調べる（`trigger`。何も変更しない）。
 
@@ -218,7 +241,7 @@ CI は、あわせて `ghcr.io/sasano8/kube-floatingtag-pinner`（amd64 / arm64 
 ./pinner pull --floating-tags=latest,dev --namespace=tutorial --pull-secret=ghcr-pull
 ./pinner pull --daemon --interval 5m   # 常駐して、5分ごとに繰り返す
 
-# 第二段階: 実行中のものがローカルと違うかを調べる（現状は info のみ。何も変更しない）
+# 第二段階: 実行中のものがローカルと違うかを調べる（アクションは未指定なら none。何も変更しない）
 ./pinner trigger
 ./pinner trigger --namespace app-authorization-demo
 
@@ -226,39 +249,37 @@ CI は、あわせて `ghcr.io/sasano8/kube-floatingtag-pinner`（amd64 / arm64 
 ./pinner sync --daemon                 # pull → trigger を、続けて繰り返す
 ```
 
-出力は、イメージごとに 1 行のログ（次は形式の例。実クラスタで取った出力ではない）。
+`pull` の出力は、イメージごとに 1 行のログ（次は形式の例。実クラスタで取った出力ではない）。
 
 ```
-level=INFO msg=unchanged image=ghcr.io/sasano8/app-authorization-demo:latest owners=[tutorial/Deployment/web] remote=sha256:bf16c8e0… local=[sha256:bf16c8e0…]
-level=WARN msg=changed   image=ghcr.io/sasano8/app-authorization-demo:latest owners=[app-authorization-demo/Service/app-authorization-demo] remote=sha256:bf16c8e0… local=[sha256:4a45bcf8…] pulled=true
-level=WARN msg="changed (dry-run: would pull)" image=ghcr.io/sasano8/app-authorization-demo:latest owners=[app-authorization-demo/Service/app-authorization-demo] remote=sha256:bf16c8e0… local=[sha256:4a45bcf8…]
-level=WARN msg=new       image=docker.io/library/nginx:latest owners=[tutorial/Deployment/proxy] remote=sha256:… local=[] pulled=true
+level=INFO msg=match stage=pull image=ghcr.io/sasano8/app-authorization-demo:latest owners=[tutorial/Deployment/web] remote=sha256:bf16c8e0… local=[sha256:bf16c8e0…]
+level=WARN msg=mismatch stage=pull image=ghcr.io/sasano8/app-authorization-demo:latest owners=[app-authorization-demo/Service/app-authorization-demo] remote=sha256:bf16c8e0… local=[sha256:4a45bcf8…] outcome=pulled
+level=WARN msg=mismatch stage=pull image=ghcr.io/sasano8/app-authorization-demo:latest owners=[…] remote=sha256:bf16c8e0… local=[sha256:4a45bcf8…] outcome=would-pull
+level=WARN msg=not-pulled stage=pull image=docker.io/library/nginx:latest owners=[tutorial/Deployment/proxy] remote=sha256:… local=[] outcome=pulled
 ```
 
-- `unchanged`: ローカルのタグがリモートと同じ digest を指している。
-- `changed`: ローカルのタグが別の digest を指していた（リモートと違う）。リモートの内容で同期した（`pulled=true`）。
-- `new`: ローカルがそのタグを持っていなかった。`--on-new=register`（既定）なら pull する。`ignore` なら `ignored` と出して何もしない。
-- `(dry-run: would pull)`: `--dry-run` のとき、pull が必要だったもの（pull はしていない）。
+`outcome` は、`pull` が違いに対してしたこと。
+
+| `outcome` | 意味 |
+| --- | --- |
+| `pulled` | pull した |
+| `would-pull` | `--dry-run` のため、pull が必要だったことだけを報告した |
+| `ignored` | `not-pulled` で、`--on-new=ignore` のため、何もしなかった |
+| `pull-failed` | pull に失敗した（`error` として報告され、終了コードは非 0） |
+
 - 1 つでも失敗（認証、タイムアウトなど）があると、終了コードは非 0。
 
 `trigger` の出力は、リソースとイメージごとに 1 行（これも形式の例）。
 
 ```
-level=INFO msg=match resource=tutorial/Deployment/web image=ghcr.io/sasano8/app-authorization-demo:latest local=[sha256:bf16c8e0…]
-level=WARN msg=mismatch resource=app-authorization-demo/Service/app-authorization-demo image=ghcr.io/sasano8/app-authorization-demo:latest running=revision=sha256:4a45bcf8… local=[sha256:bf16c8e0…]
-level=WARN msg=not-pulled resource=tutorial/Deployment/proxy image=docker.io/library/nginx:latest hint="the local cache does not hold this tag (run pull first)"
-level=INFO msg="not-running: nothing to compare (scaled to zero, or no digest reported)" resource=tutorial/DaemonSet/agent image=ghcr.io/o/agent:latest
+level=INFO msg=match stage=trigger resource=tutorial/Deployment/web image=ghcr.io/sasano8/app-authorization-demo:latest local=[sha256:bf16c8e0…]
+level=WARN msg=mismatch stage=trigger resource=app-authorization-demo/Service/app-authorization-demo image=ghcr.io/sasano8/app-authorization-demo:latest running=revision=sha256:4a45bcf8… local=[sha256:bf16c8e0…]
+level=WARN msg=not-pulled stage=trigger resource=tutorial/Deployment/proxy image=docker.io/library/nginx:latest hint="the local cache does not hold this tag (run pull first)"
+level=INFO msg=not-running stage=trigger resource=tutorial/DaemonSet/agent image=ghcr.io/o/agent:latest hint="nothing to compare (scaled to zero, or no digest reported)"
 ```
 
-比べているのは、実行中の digest と、ローカルキャッシュ（ノードのイメージストア）のタグが指す digest。
-
-| ステータス | 意味 | アクション |
-| --- | --- | --- |
-| `match` | 実行中の digest が、ローカルのタグの digest と一致する | 実行しない |
-| `mismatch` | 一致しない。**新しいのか古いのかは分からない**（違うことだけが分かる） | 実行する（`on-mismatch`。未指定は `info`） |
-| `not-pulled` | ローカルキャッシュが、そのタグを持っていない。先に `pull` を実行する | 実行する（`on-not-pulled`。未指定は `info`） |
-| `not-running` | 比べる相手（実行中の Pod / Revision の digest）が無い（Pod が 0、Revision が未 ready、`imageID` に digest が無い、など） | 実行しない |
-| `error` | 比較の途中で失敗した（権限、取得の失敗など）。1 つでもあると終了コードは非 0 | 実行する（`on-error`。未指定は `info`） |
+イベントの意味は上の表のとおり。`trigger` では、比べているのは、実行中の digest と、ローカルキャッシュ（ノードのイメージストア）のタグが指す digest。
+`not-running` は、Pod が 0、Revision が未 ready、`imageID` に digest が無い、など。
 
 - Pod は、その Pod が動くノードのタグと比べる。複数の Pod のうち 1 つでも違えば `mismatch`（違う Pod ごとに `running=` に出る）。
 - Knative の Revision は、ローカル全体のタグと比べる。

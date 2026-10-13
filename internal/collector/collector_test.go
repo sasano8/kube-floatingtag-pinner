@@ -56,7 +56,7 @@ func run(t *testing.T, loc *fakeLocal, onNew collector.OnNew) collector.Result {
 
 func TestUnchanged(t *testing.T) {
 	loc := &fakeLocal{have: []string{"sha256:b"}}
-	if r := run(t, loc, collector.OnNewRegister); r.Status != collector.StatusUnchanged || len(loc.pulledDig) != 0 {
+	if r := run(t, loc, collector.OnNewRegister); r.Status != collector.StatusMatch || len(loc.pulledDig) != 0 {
 		t.Fatalf("%+v %v", r, loc.pulledDig)
 	}
 }
@@ -64,21 +64,21 @@ func TestUnchanged(t *testing.T) {
 func TestChangedPulls(t *testing.T) {
 	loc := &fakeLocal{have: []string{"sha256:a"}}
 	r := run(t, loc, collector.OnNewIgnore) // on-new does not apply to a known repository
-	if r.Status != collector.StatusChanged || !r.Pulled || loc.pulledDig[0] != "sha256:b" {
+	if r.Status != collector.StatusMismatch || !r.Pulled || loc.pulledDig[0] != "sha256:b" {
 		t.Fatalf("%+v %v", r, loc.pulledDig)
 	}
 }
 
 func TestNewRegisterPulls(t *testing.T) {
 	loc := &fakeLocal{}
-	if r := run(t, loc, collector.OnNewRegister); r.Status != collector.StatusNew || !r.Pulled {
+	if r := run(t, loc, collector.OnNewRegister); r.Status != collector.StatusNotPulled || !r.Pulled {
 		t.Fatalf("%+v", r)
 	}
 }
 
 func TestNewIgnoreDoesNothing(t *testing.T) {
 	loc := &fakeLocal{}
-	if r := run(t, loc, collector.OnNewIgnore); r.Status != collector.StatusIgnored || r.Pulled || len(loc.pulledDig) != 0 {
+	if r := run(t, loc, collector.OnNewIgnore); r.Status != collector.StatusNotPulled || !r.Ignored || r.Pulled || len(loc.pulledDig) != 0 {
 		t.Fatalf("%+v", r)
 	}
 }
@@ -86,7 +86,7 @@ func TestNewIgnoreDoesNothing(t *testing.T) {
 func TestPullNotImplementedIsReported(t *testing.T) {
 	loc := &fakeLocal{have: []string{"sha256:a"}, pullErr: collector.ErrPullNotImplemented}
 	r := run(t, loc, collector.OnNewRegister)
-	if r.Status != collector.StatusChanged || r.Pulled || !errors.Is(r.PullErr, collector.ErrPullNotImplemented) {
+	if r.Status != collector.StatusMismatch || r.Pulled || !errors.Is(r.PullErr, collector.ErrPullNotImplemented) {
 		t.Fatalf("%+v", r)
 	}
 }
@@ -94,7 +94,7 @@ func TestPullNotImplementedIsReported(t *testing.T) {
 // The tag differs between nodes: some already at the remote digest, some not.
 func TestTagDivergedAcrossNodesIsChanged(t *testing.T) {
 	loc := &fakeLocal{have: []string{"sha256:a", "sha256:b"}}
-	if r := run(t, loc, collector.OnNewRegister); r.Status != collector.StatusChanged || !r.Pulled {
+	if r := run(t, loc, collector.OnNewRegister); r.Status != collector.StatusMismatch || !r.Pulled {
 		t.Fatalf("%+v", r)
 	}
 }

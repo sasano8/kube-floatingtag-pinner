@@ -90,15 +90,6 @@ func TestNoLocalAndNoRunning(t *testing.T) {
 	}
 }
 
-func TestErrorFindingGoesToInfoByDefault(t *testing.T) {
-	info := &recorder{name: "info"}
-	a := trigger.NewActor(info)
-	f := trigger.Finding{Resource: trigger.Resource{Kind: "Deployment", Name: "d"}, Status: trigger.StatusError, Err: errors.New("boom")}
-	if err := a.Act(context.Background(), f); err != nil || len(info.got) != 1 {
-		t.Fatalf("%v %d", err, len(info.got))
-	}
-}
-
 func TestRunningErrorIsReported(t *testing.T) {
 	local := fakeLocal{img: {"n1": {"sha256:B"}}}
 	f := detect(t, local, fakeRunning{err: errors.New("boom")}, deploy("web"))[0]
@@ -120,33 +111,33 @@ func (r *recorder) Do(_ context.Context, f trigger.Finding) error {
 }
 
 func TestActorPicksActionByEventAnnotation(t *testing.T) {
-	info, other := &recorder{name: "info"}, &recorder{name: "other"}
-	a := trigger.NewActor(info, other)
+	none, other := &recorder{name: "none"}, &recorder{name: "other"}
+	a := trigger.NewActor(none, other)
 	ctx := context.Background()
 
 	f := trigger.Finding{Resource: trigger.Resource{Kind: "Deployment", Name: "d"}, Status: trigger.StatusMismatch,
 		Mismatches: []trigger.Mismatch{{}}}
-	if err := a.Act(ctx, f); err != nil || len(info.got) != 1 {
-		t.Fatalf("default must be info: %v %d", err, len(info.got))
+	if err := a.Act(ctx, f); err != nil || len(none.got) != 1 {
+		t.Fatalf("default must be none: %v %d", err, len(none.got))
 	}
 	f.Actions = map[string]string{"mismatch": "other"}
 	if err := a.Act(ctx, f); err != nil || len(other.got) != 1 {
 		t.Fatalf("%v", err)
 	}
-	// on-mismatch is not inherited by not-pulled: it stays info
+	// on-mismatch is not inherited by not-pulled: it stays none
 	f.Status = trigger.StatusNotPulled
-	if err := a.Act(ctx, f); err != nil || len(other.got) != 1 || len(info.got) != 2 {
-		t.Fatalf("not-pulled must default to info, not to the mismatch action: %v", err)
+	if err := a.Act(ctx, f); err != nil || len(other.got) != 1 || len(none.got) != 2 {
+		t.Fatalf("not-pulled must default to none, not to the mismatch action: %v", err)
 	}
 	f.Actions["not-pulled"] = "other"
 	if err := a.Act(ctx, f); err != nil || len(other.got) != 2 {
 		t.Fatalf("%v", err)
 	}
-	a.ForceInfo = true
-	if err := a.Act(ctx, f); err != nil || len(other.got) != 2 || len(info.got) != 3 {
-		t.Fatalf("ForceInfo must run info: %v", err)
+	a.DryRun = true
+	if err := a.Act(ctx, f); err != nil || len(other.got) != 2 {
+		t.Fatalf("a dry run must not run the action: %v", err)
 	}
-	a.ForceInfo = false
+	a.DryRun = false
 	f.Actions["not-pulled"] = "missing"
 	if err := a.Act(ctx, f); err == nil {
 		t.Fatal("unknown action must be an error")
@@ -154,5 +145,14 @@ func TestActorPicksActionByEventAnnotation(t *testing.T) {
 	f.Actions["not-pulled"], f.Kind = "other", "Service"
 	if err := a.Act(ctx, f); err == nil {
 		t.Fatal("unsupported kind must be an error")
+	}
+}
+
+func TestErrorFindingGoesToNoneByDefault(t *testing.T) {
+	none := &recorder{name: "none"}
+	a := trigger.NewActor(none)
+	f := trigger.Finding{Resource: trigger.Resource{Kind: "Deployment", Name: "d"}, Status: trigger.StatusError, Err: errors.New("boom")}
+	if err := a.Act(context.Background(), f); err != nil || len(none.got) != 1 {
+		t.Fatalf("%v %d", err, len(none.got))
 	}
 }

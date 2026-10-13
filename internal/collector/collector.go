@@ -64,10 +64,10 @@ func ParseOnNew(s string) (OnNew, error) {
 type Status string
 
 const (
-	StatusNew       Status = "new"       // local does not hold the tag; handled per OnNew
-	StatusIgnored   Status = "ignored"   // new, and OnNew is ignore
-	StatusUnchanged Status = "unchanged" // the local tag points to the remote digest
-	StatusChanged   Status = "changed"   // the local tag points to a different digest than the remote
+	// The names are shared with stage 2 (internal/report).
+	StatusMatch     Status = "match"      // the local tag points to the remote digest
+	StatusMismatch  Status = "mismatch"   // the local tag points to a different digest than the remote
+	StatusNotPulled Status = "not-pulled" // the local cache does not hold the tag; handled per OnNew
 	StatusError     Status = "error"
 )
 
@@ -77,6 +77,7 @@ type Result struct {
 	Remote  string   // digest on the remote registry
 	Local   []string // digests the tag points to locally
 	Pulled  bool
+	Ignored bool  // not-pulled, and OnNew is ignore: left alone
 	DryRun  bool  // a pull was needed but skipped (Collector.DryRun)
 	PullErr error // set when a pull was attempted and failed
 	Err     error
@@ -124,16 +125,16 @@ func (c *Collector) collect(ctx context.Context, t Target) Result {
 
 	switch {
 	case len(local) == 1 && local[0] == remote:
-		r.Status = StatusUnchanged
+		r.Status = StatusMatch
 		return r
 	case len(local) == 0:
 		if c.OnNew == OnNewIgnore {
-			r.Status = StatusIgnored
+			r.Status, r.Ignored = StatusNotPulled, true
 			return r
 		}
-		r.Status = StatusNew
+		r.Status = StatusNotPulled
 	default:
-		r.Status = StatusChanged
+		r.Status = StatusMismatch
 	}
 
 	if c.DryRun {

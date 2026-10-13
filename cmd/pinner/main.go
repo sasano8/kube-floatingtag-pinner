@@ -23,6 +23,7 @@ import (
 	"github.com/sasano8/kube-floatingtag-pinner/internal/collector"
 	"github.com/sasano8/kube-floatingtag-pinner/internal/local"
 	"github.com/sasano8/kube-floatingtag-pinner/internal/registry"
+	"github.com/sasano8/kube-floatingtag-pinner/internal/report"
 	"github.com/sasano8/kube-floatingtag-pinner/internal/source"
 	"github.com/sasano8/kube-floatingtag-pinner/internal/trigger"
 )
@@ -44,6 +45,8 @@ type common struct {
 	daemon     *bool
 	interval   *time.Duration
 	dryRun     *bool
+	logLevel   *string
+	logEvents  *string
 }
 
 func registerCommon(fs *flag.FlagSet, dryRunHelp string) *common {
@@ -56,6 +59,8 @@ func registerCommon(fs *flag.FlagSet, dryRunHelp string) *common {
 		daemon:     fs.Bool("daemon", false, "keep running: repeat every --interval until stopped (default: run once and exit)"),
 		interval:   fs.Duration("interval", 5*time.Minute, "with --daemon: time between passes"),
 		dryRun:     fs.Bool("dry-run", false, dryRunHelp),
+		logLevel:   fs.String("log-level", "info", "log level threshold: debug|info|warn|error (match, not-running = info; mismatch, not-pulled = warn; error = error)"),
+		logEvents:  fs.String("log-events", "", "comma-separated events to log (default: all): match, mismatch, not-pulled, error; trigger also not-running"),
 	}
 }
 
@@ -112,6 +117,7 @@ func setupPull(args []string) job {
 	pullSecret := fs.String("pull-secret", "", "imagePullSecret name (in --pull-namespace) for private registries")
 	pullTimeout := fs.Duration("pull-timeout", 2*time.Minute, "per-node timeout for a pull")
 	fs.Parse(args)
+	rep := setupLogging(c, report.Match, report.Mismatch, report.NotPulled, report.Error)
 
 	policy, err := collector.ParseOnNew(*onNew)
 	if err != nil {
@@ -125,13 +131,14 @@ func setupPull(args []string) job {
 		OnNew:    policy,
 		DryRun:   *c.dryRun,
 	}
-	return job{pass: func(ctx context.Context) bool { return pullPass(ctx, col) }, daemon: *c.daemon, interval: *c.interval}
+	return job{pass: func(ctx context.Context) bool { return pullPass(ctx, col, rep) }, daemon: *c.daemon, interval: *c.interval}
 }
 
 func setupTrigger(args []string) job {
 	fs := flag.NewFlagSet("pinner trigger", flag.ExitOnError)
-	c := registerCommon(fs, "run every action as info: report only, change nothing")
+	c := registerCommon(fs, "run no action: log which action would have run")
 	fs.Parse(args)
+	rep := setupLogging(c, report.Match, report.Mismatch, report.NotPulled, report.NotRunning, report.Error)
 
 	client := newClient(*c.kubeconfig)
 	det := &trigger.Detector{
@@ -139,9 +146,23 @@ func setupTrigger(args []string) job {
 		Local:   newLocal(*c.localKind, &local.Node{Client: client}),
 		Running: &source.KubeRunning{Client: client},
 	}
-	actor := trigger.NewActor(trigger.Info{}, trigger.None{})
-	actor.ForceInfo = *c.dryRun
-	return job{pass: func(ctx context.Context) bool { return triggerPass(ctx, det, actor) }, daemon: *c.daemon, interval: *c.interval}
+	actor := trigger.NewActor(trigger.None{})
+	actor.DryRun = *c.dryRun
+	return job{pass: func(ctx context.Context) bool { return triggerPass(ctx, det, actor, rep) }, daemon: *c.daemon, interval: *c.interval}
+}
+
+// setupLogging installs the logger at --log-level and returns the reporter for --log-events.
+func setupLogging(c *common, allowed ...report.Event) report.Reporter {
+	level, err := report.ParseLevel(*c.logLevel)
+	if err != nil {
+		fatal(err)
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
+	events, err := report.ParseEvents(*c.logEvents, allowed...)
+	if err != nil {
+		fatal(err)
+	}
+	return report.Reporter{Events: events}
 }
 
 func newClient(kubeconfig string) dynamic.Interface {
@@ -164,8 +185,8 @@ func newLocal(kind string, node *local.Node) *local.Node {
 	return node
 }
 
-// pullPass runs one collection and logs the results. It reports whether it succeeded.
-func pullPass(ctx context.Context, c *collector.Collector) bool {
+// pullPass runs one collection and reports the results. It reports whether it succeeded.
+func pullPass(ctx context.Context, c *collector.Collector, rep report.Reporter) bool {
 	results, err := c.CollectOnce(ctx)
 	if err != nil {
 		slog.Error("collect failed", "err", err)
@@ -173,29 +194,42 @@ func pullPass(ctx context.Context, c *collector.Collector) bool {
 	}
 	ok := true
 	for _, r := range results {
-		attrs := []any{"image", r.Image, "owners", r.Owners, "remote", r.Remote, "local", r.Local}
+		attrs := []any{"stage", "pull", "image", r.Image, "owners", r.Owners, "remote", r.Remote, "local", r.Local}
 		switch {
 		case r.Status == collector.StatusError:
 			ok = false
-			slog.Error("failed", append(attrs, "err", r.Err)...)
+			rep.Emit(ctx, report.Error, append(attrs, "err", r.Err)...)
 		case r.PullErr != nil && errors.Is(r.PullErr, collector.ErrPullNotImplemented):
-			slog.Warn(string(r.Status)+": pull needed but not supported by this local", attrs...)
+			rep.Emit(ctx, report.Event(r.Status), append(attrs, "outcome", "pull-unsupported")...)
 		case r.PullErr != nil:
 			ok = false
-			slog.Error(string(r.Status)+": pull failed", append(attrs, "err", r.PullErr)...)
-		case r.DryRun:
-			slog.Warn(string(r.Status)+" (dry-run: would pull)", attrs...)
-		case r.Status == collector.StatusChanged || r.Status == collector.StatusNew:
-			slog.Warn(string(r.Status), append(attrs, "pulled", r.Pulled)...)
+			rep.Emit(ctx, report.Error, append(attrs, "event", string(r.Status), "outcome", "pull-failed", "err", r.PullErr)...)
 		default:
-			slog.Info(string(r.Status), attrs...)
+			if o := pullOutcome(r); o != "" {
+				attrs = append(attrs, "outcome", o)
+			}
+			rep.Emit(ctx, report.Event(r.Status), attrs...)
 		}
 	}
 	return ok
 }
 
-// triggerPass detects resources whose digest differs from the local cache and hands each to its action. It reports whether it succeeded.
-func triggerPass(ctx context.Context, d *trigger.Detector, actor *trigger.Actor) bool {
+// pullOutcome says what pull did about a difference ("" when there was nothing to do).
+func pullOutcome(r collector.Result) string {
+	switch {
+	case r.Pulled:
+		return "pulled"
+	case r.DryRun:
+		return "would-pull"
+	case r.Ignored:
+		return "ignored"
+	}
+	return ""
+}
+
+// triggerPass reports what it finds and hands the findings an action is bound to to the actor.
+// It reports whether it succeeded.
+func triggerPass(ctx context.Context, d *trigger.Detector, actor *trigger.Actor, rep report.Reporter) bool {
 	findings, err := d.Detect(ctx)
 	if err != nil {
 		slog.Error("detect failed", "err", err)
@@ -203,25 +237,44 @@ func triggerPass(ctx context.Context, d *trigger.Detector, actor *trigger.Actor)
 	}
 	ok := true
 	for _, f := range findings {
-		attrs := []any{"resource", f.Resource.String(), "image", f.Image}
+		attrs := []any{"stage", "trigger", "resource", f.Resource.String(), "image", f.Image}
 		switch f.Status {
 		case trigger.StatusError:
 			ok = false // the exit code reports it whatever the action does
-			if err := actor.Act(ctx, f); err != nil {
-				slog.Error("action failed", append(attrs, "err", err)...)
-			}
-		case trigger.StatusMismatch, trigger.StatusNotPulled:
+			attrs = append(attrs, "err", f.Err)
+		case trigger.StatusMismatch:
+			attrs = append(attrs, "running", describe(f.Mismatches), "local", f.Mismatches[0].Want)
+		case trigger.StatusNotPulled:
+			attrs = append(attrs, "hint", "the local cache does not hold this tag (run pull first)")
+		case trigger.StatusNotRunning:
+			attrs = append(attrs, "hint", "nothing to compare (scaled to zero, or no digest reported)")
+		default:
+			attrs = append(attrs, "local", f.Local)
+		}
+		rep.Emit(ctx, report.Event(f.Status), attrs...)
+
+		switch f.Status {
+		case trigger.StatusMismatch, trigger.StatusNotPulled, trigger.StatusError:
 			if err := actor.Act(ctx, f); err != nil {
 				ok = false
-				slog.Error("action failed", append(attrs, "err", err)...)
+				slog.Error("action failed", "resource", f.Resource.String(), "image", f.Image, "err", err)
 			}
-		case trigger.StatusNotRunning:
-			slog.Info("not-running: nothing to compare (scaled to zero, or no digest reported)", attrs...)
-		default:
-			slog.Info(string(f.Status), append(attrs, "local", f.Local)...)
 		}
 	}
 	return ok
+}
+
+// describe lists the running digests that differ, e.g. "web-1=sha256:…,revision=sha256:…".
+func describe(ms []trigger.Mismatch) string {
+	parts := make([]string, 0, len(ms))
+	for _, x := range ms {
+		who := x.Pod
+		if who == "" {
+			who = "revision"
+		}
+		parts = append(parts, who+"="+x.Digest)
+	}
+	return strings.Join(parts, ",")
 }
 
 func splitList(s string) []string {

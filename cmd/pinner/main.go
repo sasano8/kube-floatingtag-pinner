@@ -46,7 +46,7 @@ type common struct {
 	interval   *time.Duration
 	dryRun     *bool
 	logLevel   *string
-	logEvents  *string
+	logStates  *string
 }
 
 func registerCommon(fs *flag.FlagSet, dryRunHelp string) *common {
@@ -60,7 +60,7 @@ func registerCommon(fs *flag.FlagSet, dryRunHelp string) *common {
 		interval:   fs.Duration("interval", 5*time.Minute, "with --daemon: time between passes"),
 		dryRun:     fs.Bool("dry-run", false, dryRunHelp),
 		logLevel:   fs.String("log-level", "info", "log level threshold: debug|info|warn|error (match, not-running = info; mismatch, not-pulled = warn; error = error)"),
-		logEvents:  fs.String("log-events", "", "comma-separated events to log (default: all): match, mismatch, not-pulled, error; trigger also not-running"),
+		logStates:  fs.String("log-states", "", "comma-separated states to log (default: all): match, mismatch, not-pulled, error; trigger also not-running"),
 	}
 }
 
@@ -151,18 +151,18 @@ func setupTrigger(args []string) job {
 	return job{pass: func(ctx context.Context) bool { return triggerPass(ctx, det, actor, rep) }, daemon: *c.daemon, interval: *c.interval}
 }
 
-// setupLogging installs the logger at --log-level and returns the reporter for --log-events.
-func setupLogging(c *common, allowed ...report.Event) report.Reporter {
+// setupLogging installs the logger at --log-level and returns the reporter for --log-states.
+func setupLogging(c *common, allowed ...report.State) report.Reporter {
 	level, err := report.ParseLevel(*c.logLevel)
 	if err != nil {
 		fatal(err)
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
-	events, err := report.ParseEvents(*c.logEvents, allowed...)
+	states, err := report.ParseStates(*c.logStates, allowed...)
 	if err != nil {
 		fatal(err)
 	}
-	return report.Reporter{Events: events}
+	return report.Reporter{States: states}
 }
 
 func newClient(kubeconfig string) dynamic.Interface {
@@ -186,6 +186,7 @@ func newLocal(kind string, node *local.Node) *local.Node {
 }
 
 // pullPass runs one collection and reports the results. It reports whether it succeeded.
+// A pull shows as a change of state: the state found, then the state read back after pulling.
 func pullPass(ctx context.Context, c *collector.Collector, rep report.Reporter) bool {
 	results, err := c.CollectOnce(ctx)
 	if err != nil {
@@ -200,15 +201,24 @@ func pullPass(ctx context.Context, c *collector.Collector, rep report.Reporter) 
 			ok = false
 			rep.Emit(ctx, report.Error, append(attrs, "err", r.Err)...)
 		case r.PullErr != nil && errors.Is(r.PullErr, collector.ErrPullNotImplemented):
-			rep.Emit(ctx, report.Event(r.Status), append(attrs, "outcome", "pull-unsupported")...)
+			rep.Emit(ctx, report.State(r.Status), append(attrs, "outcome", "pull-unsupported")...)
 		case r.PullErr != nil:
 			ok = false
-			rep.Emit(ctx, report.Error, append(attrs, "event", string(r.Status), "outcome", "pull-failed", "err", r.PullErr)...)
+			rep.Emit(ctx, report.Error, append(attrs, "state", string(r.Status), "outcome", "pull-failed", "err", r.PullErr)...)
 		default:
 			if o := pullOutcome(r); o != "" {
 				attrs = append(attrs, "outcome", o)
 			}
-			rep.Emit(ctx, report.Event(r.Status), attrs...)
+			rep.Emit(ctx, report.State(r.Status), attrs...)
+			if r.Pulled {
+				after := []any{"stage", "pull", "image", r.Image, "owners", r.Owners, "remote", r.Remote, "local", r.AfterLocal, "via", "pulling"}
+				if r.AfterErr != nil {
+					ok = false
+					rep.Emit(ctx, report.Error, append(after, "err", r.AfterErr)...)
+				} else {
+					rep.Emit(ctx, report.State(r.After), after...)
+				}
+			}
 		}
 	}
 	return ok
@@ -251,7 +261,7 @@ func triggerPass(ctx context.Context, d *trigger.Detector, actor *trigger.Actor,
 		default:
 			attrs = append(attrs, "local", f.Local)
 		}
-		rep.Emit(ctx, report.Event(f.Status), attrs...)
+		rep.Emit(ctx, report.State(f.Status), attrs...)
 
 		switch f.Status {
 		case trigger.StatusMismatch, trigger.StatusNotPulled, trigger.StatusError:

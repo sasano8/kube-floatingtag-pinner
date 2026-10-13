@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // Target is an image to track together with the resources that reference it.
@@ -81,6 +82,13 @@ type Result struct {
 	DryRun  bool  // a pull was needed but skipped (Collector.DryRun)
 	PullErr error // set when a pull was attempted and failed
 	Err     error
+
+	// After is the state read back after a successful pull, so a pull shows as a change of state
+	// (mismatch -> match). It stays mismatch/not-pulled if the local tag did not reach the remote
+	// digest (the tag moved again, the pull did not take, ...). Empty when nothing was pulled.
+	After      Status
+	AfterLocal []string
+	AfterErr   error
 }
 
 type Collector struct {
@@ -91,6 +99,12 @@ type Collector struct {
 
 	// DryRun reports what would be pulled without pulling. Everything else is read-only anyway.
 	DryRun bool
+
+	// After a pull the local tag is read back until it points to the remote digest, or
+	// VerifyTimeout passes: the nodes report their images with a delay (kubelet's node status
+	// update). Zero = 30s / 2s.
+	VerifyTimeout  time.Duration
+	VerifyInterval time.Duration
 }
 
 // CollectOnce runs one pass. Per-image failures are reported in the results;
@@ -146,5 +160,39 @@ func (c *Collector) collect(ctx context.Context, t Target) Result {
 		return r
 	}
 	r.Pulled = true
+	r.After, r.AfterLocal, r.AfterErr = c.verify(ctx, t.Image, remote)
 	return r
+}
+
+// verify reads the local tag back after a pull and says whether it now matches the remote.
+func (c *Collector) verify(ctx context.Context, image, remote string) (Status, []string, error) {
+	timeout, interval := c.VerifyTimeout, c.VerifyInterval
+	if timeout == 0 {
+		timeout = 30 * time.Second
+	}
+	if interval == 0 {
+		interval = 2 * time.Second
+	}
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	for {
+		local, err := c.Local.TagDigests(ctx, image)
+		if err != nil {
+			return StatusError, nil, fmt.Errorf("read back after pull: %w", err)
+		}
+		state := StatusMismatch
+		switch {
+		case len(local) == 1 && local[0] == remote:
+			return StatusMatch, local, nil
+		case len(local) == 0:
+			state = StatusNotPulled
+		}
+		select {
+		case <-ctx.Done():
+			return state, local, nil
+		case <-deadline.C:
+			return state, local, nil
+		case <-time.After(interval):
+		}
+	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/sasano8/kube-floatingtag-pinner/internal/collector"
 )
@@ -23,6 +24,8 @@ func (f fakeRegistry) Digest(_ context.Context, image string) (string, error) {
 }
 
 type fakeLocal struct {
+	// stuck: the pull succeeds but the local tag does not move (the tag moved again, kubelet lag, ...)
+	stuck     bool
 	have      []string
 	pullErr   error
 	pulledDig []string
@@ -34,6 +37,9 @@ func (f *fakeLocal) Pull(_ context.Context, _, digest string) error {
 		return f.pullErr
 	}
 	f.pulledDig = append(f.pulledDig, digest)
+	if !f.stuck {
+		f.have = []string{digest} // the tag now points to what was pulled
+	}
 	return nil
 }
 
@@ -46,6 +52,9 @@ func run(t *testing.T, loc *fakeLocal, onNew collector.OnNew) collector.Result {
 		Registry: fakeRegistry{img: "sha256:b"},
 		Local:    loc,
 		OnNew:    onNew,
+
+		VerifyTimeout:  20 * time.Millisecond,
+		VerifyInterval: 2 * time.Millisecond,
 	}
 	rs, err := c.CollectOnce(context.Background())
 	if err != nil || len(rs) != 1 {
@@ -116,5 +125,34 @@ func TestDryRunDoesNotPull(t *testing.T) {
 		if r := rs[0]; !r.DryRun || r.Pulled || len(loc.pulledDig) != 0 {
 			t.Fatalf("have=%v: %+v pulled=%v", have, r, loc.pulledDig)
 		}
+	}
+}
+
+func TestPullIsReadBackAsAChangeOfState(t *testing.T) {
+	loc := &fakeLocal{have: []string{"sha256:a"}}
+	r := run(t, loc, collector.OnNewRegister)
+	if r.Status != collector.StatusMismatch || !r.Pulled || r.After != collector.StatusMatch ||
+		len(r.AfterLocal) != 1 || r.AfterLocal[0] != "sha256:b" {
+		t.Fatalf("%+v", r)
+	}
+	if r := run(t, &fakeLocal{}, collector.OnNewRegister); r.Status != collector.StatusNotPulled || r.After != collector.StatusMatch {
+		t.Fatalf("not-pulled -> match: %+v", r)
+	}
+}
+
+func TestPullThatDoesNotTakeStaysMismatch(t *testing.T) {
+	loc := &fakeLocal{have: []string{"sha256:a"}, stuck: true}
+	r := run(t, loc, collector.OnNewRegister)
+	if !r.Pulled || r.After != collector.StatusMismatch || r.AfterLocal[0] != "sha256:a" {
+		t.Fatalf("%+v", r)
+	}
+	if r := run(t, &fakeLocal{stuck: true}, collector.OnNewRegister); r.After != collector.StatusNotPulled {
+		t.Fatalf("%+v", r)
+	}
+}
+
+func TestNothingReadBackWithoutAPull(t *testing.T) {
+	if r := run(t, &fakeLocal{have: []string{"sha256:b"}}, collector.OnNewRegister); r.After != "" {
+		t.Fatalf("a match pulls nothing: %+v", r)
 	}
 }

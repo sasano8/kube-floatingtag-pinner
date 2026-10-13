@@ -20,7 +20,7 @@ func capture(t *testing.T, level slog.Level) *bytes.Buffer {
 }
 
 func TestLevelsAreFixedPerKind(t *testing.T) {
-	for e, want := range map[report.Event]slog.Level{
+	for e, want := range map[report.State]slog.Level{
 		report.Match: slog.LevelInfo, report.NotRunning: slog.LevelInfo,
 		report.Mismatch: slog.LevelWarn, report.NotPulled: slog.LevelWarn, report.Error: slog.LevelError,
 	} {
@@ -30,16 +30,16 @@ func TestLevelsAreFixedPerKind(t *testing.T) {
 	}
 }
 
-func TestEventsFilterAndLevelThreshold(t *testing.T) {
+func TestStatesFilterAndLevelThreshold(t *testing.T) {
 	buf := capture(t, slog.LevelInfo)
-	r := report.Reporter{Events: map[report.Event]bool{report.Mismatch: true}}
+	r := report.Reporter{States: map[report.State]bool{report.Mismatch: true}}
 	r.Emit(context.Background(), report.Match, "image", "a")
 	r.Emit(context.Background(), report.Mismatch, "image", "b")
 	if out := buf.String(); strings.Contains(out, "msg=match ") || !strings.Contains(out, "msg=mismatch") {
 		t.Fatalf("filter: %q", out)
 	}
 
-	buf = capture(t, slog.LevelWarn) // --log-level=warn hides INFO events
+	buf = capture(t, slog.LevelWarn) // --log-level=warn hides INFO states
 	report.Reporter{}.Emit(context.Background(), report.Match)
 	report.Reporter{}.Emit(context.Background(), report.NotPulled)
 	if out := buf.String(); strings.Contains(out, "msg=match") || !strings.Contains(out, "msg=not-pulled") {
@@ -54,14 +54,14 @@ func TestParse(t *testing.T) {
 	if _, err := report.ParseLevel("loud"); err == nil {
 		t.Fatal("unknown level must fail")
 	}
-	got, err := report.ParseEvents("mismatch, error", report.Match, report.Mismatch, report.Error)
+	got, err := report.ParseStates("mismatch, error", report.Match, report.Mismatch, report.Error)
 	if err != nil || !got[report.Mismatch] || !got[report.Error] || got[report.Match] {
 		t.Fatalf("%v %v", got, err)
 	}
-	if _, err := report.ParseEvents("not-running", report.Match, report.Mismatch); err == nil {
-		t.Fatal("an event the command cannot emit must fail")
+	if _, err := report.ParseStates("not-running", report.Match, report.Mismatch); err == nil {
+		t.Fatal("a state the command cannot emit must fail")
 	}
-	if got, err := report.ParseEvents("", report.Match); got != nil || err != nil {
-		t.Fatalf("empty = every event: %v %v", got, err)
+	if got, err := report.ParseStates("", report.Match); got != nil || err != nil {
+		t.Fatalf("empty = every state: %v %v", got, err)
 	}
 }

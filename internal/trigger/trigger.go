@@ -16,7 +16,7 @@ type Resource struct {
 	Namespace string
 	Name      string
 	Images    []string
-	Actions   map[string]string // event ("mismatch", "not-pulled") -> action name, from the on-<event> annotations
+	Actions   map[string]string // state ("mismatch", "not-pulled", "error") -> action name, from the on-<state> annotations
 	Selector  string            // pod label selector (workloads)
 	Revision  string            // latest ready Revision (Knative Service)
 }

@@ -110,7 +110,7 @@ func (r *recorder) Do(_ context.Context, f trigger.Finding) error {
 	return nil
 }
 
-func TestActorPicksActionByEventAnnotation(t *testing.T) {
+func TestActorPicksActionByStateAnnotation(t *testing.T) {
 	none, other := &recorder{name: "none"}, &recorder{name: "other"}
 	a := trigger.NewActor(none, other)
 	ctx := context.Background()

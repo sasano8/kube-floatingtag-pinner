@@ -47,7 +47,7 @@ type Kube struct {
 	FloatingTags []string
 }
 
-// ActionAnnotationPrefix + <event> names the action for an event, e.g.
+// ActionAnnotationPrefix + <state> names the action for a state, e.g.
 // floatingtag-pinner/on-mismatch: restart. Most resources only need on-mismatch.
 const ActionAnnotationPrefix = "floatingtag-pinner/on-"
 

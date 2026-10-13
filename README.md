@@ -108,7 +108,7 @@ digest を別に記録することはしない（正本はリモートのレジ�
 アクション（`trigger` がリソースにすること）は、ログ（報告）とは別のもの。
 
 - **ログ**: 見つけたことは、アクションと関係なく、常にすべて報告する。出す範囲は実行時のオプションで絞る（下の「ログ」）。
-- **アクション**: リソースに何かをするもの。リソースの annotation で、イベントごとに指定する。**既定は `none`（何もしない）**。
+- **アクション**: リソースに何かをするもの。リソースの annotation で、状態ごとに指定する。**既定は `none`（何もしない）**。
   現状のアクションは `none` だけで、`delete-pods` などは未実装（指定するとエラーになる）。つまり、いまの `trigger` はリソースに何も変更しない。
 
 | annotation | 意味 | 既定 |
@@ -125,9 +125,9 @@ digest を別に記録することはしない（正本はリモートのレジ�
 
 ### ログ
 
-`pull` も `trigger` も、見つけたことを、次の**イベント**として報告する。名前は両方で共通。比べる相手だけが違う。
+`pull` も `trigger` も、見つけたことを、次の**状態**として報告する。名前は両方で共通。比べる相手だけが違う。
 
-| イベント | 第一段階（`pull`）: リモート ⇔ ローカル | 第二段階（`trigger`）: ローカル ⇔ 実行中 | ログレベル |
+| 状態 | 第一段階（`pull`）: リモート ⇔ ローカル | 第二段階（`trigger`）: ローカル ⇔ 実行中 | ログレベル |
 | --- | --- | --- | --- |
 | `match` | ローカルのタグがリモートと同じ digest | 実行中の digest がローカルのタグと同じ | INFO |
 | `mismatch` | ローカルのタグがリモートと違う digest（新旧は分からない） | 実行中の digest がローカルのタグと違う（新旧は分からない） | WARN |
@@ -135,134 +135,41 @@ digest を別に記録することはしない（正本はリモートのレジ�
 | `not-running` | （なし） | 比べる相手（実行中の Pod / Revision の digest）が無い | INFO |
 | `error` | 失敗（認証、タイムアウトなど） | 失敗（権限、取得の失敗など） | ERROR |
 
-ログレベルは、イベントごとに固定（何もすることがない = INFO、違いがある = WARN、失敗 = ERROR）。
+ログレベルは、状態ごとに固定（何もすることがない = INFO、違いがある = WARN、失敗 = ERROR）。
 
 | オプション | 内容 | 既定 |
 | --- | --- | --- |
 | `--log-level` | ログレベルの下限（`debug` / `info` / `warn` / `error`） | `info` |
-| `--log-events` | ログに出すイベント（カンマ区切り。例: `mismatch,not-pulled,error`）。そのコマンドが出さないイベントを指定するとエラー | すべて |
+| `--log-states` | ログに出す状態（カンマ区切り。例: `mismatch,not-pulled,error`）。そのコマンドが出さない状態を指定するとエラー | すべて |
 
-`--daemon` で `match` が毎回出てうるさいときは、`--log-level=warn` か `--log-events=mismatch,not-pulled,error` で絞れる。
+`--daemon` で `match` が毎回出てうるさいときは、`--log-level=warn` か `--log-states=mismatch,not-pulled,error` で絞れる。
 
-## インストール
+状態の扱いは、段階で違う。
 
-手元で動かす想定（クラスタの中で動かす構成は、まだ考えていない）。
-
-- 必要なもの: 対象クラスタに届く `kubeconfig`。
-- 権限: Node の list、対象リソース（Deployment など）の list、`--pull-namespace` での Pod の create / get / delete。
-  `trigger` は読み取りのみ（Pod の list、Knative の Revision の get）。
-  手元の `kubeconfig` が管理者権限なら、追加の設定は要らない。
-
-### バイナリをダウンロードする
-
-CI が、`main` への push のたびに、[`latest` の Release](https://github.com/sasano8/kube-floatingtag-pinner/releases/tag/latest) を
-最新のバイナリで**上書き**する（バージョン番号は付けない）。ファイルは次のとおり。
-
-| OS | アーキ | ファイル |
-| --- | --- | --- |
-| Linux | amd64 / arm64 | `pinner_linux_amd64.tar.gz` / `pinner_linux_arm64.tar.gz` |
-| macOS | amd64 / arm64 | `pinner_darwin_amd64.tar.gz` / `pinner_darwin_arm64.tar.gz` |
-| Windows | amd64 / arm64 | `pinner_windows_amd64.zip` / `pinner_windows_arm64.zip` |
-
-`checksums.txt` に SHA-256 がある。
-
-```sh
-# gh があれば（Linux の amd64 の例）
-gh release download latest -R sasano8/kube-floatingtag-pinner -p 'pinner_linux_amd64.tar.gz'
-tar xzf pinner_linux_amd64.tar.gz       # → pinner
-./pinner pull --help
-```
-
-- ブラウザからは、上の Release のページで、自分の OS のファイルを取る。Windows は zip を展開して `pinner.exe` を使う。
-- macOS のバイナリは署名していないので、初回に警告される。`xattr -d com.apple.quarantine pinner` で外せる。
-- リポジトリが private の間は、Release のダウンロードに GitHub の認証が要る（`gh` ならログイン済みで取れる）。
-
-### ソースからビルドする
-
-```sh
-git clone https://github.com/sasano8/kube-floatingtag-pinner && cd kube-floatingtag-pinner
-go build -o pinner ./cmd/pinner     # Go は go.mod の版
-# または、ビルドせずに: go run ./cmd/pinner pull ...
-```
-
-CI は、あわせて `ghcr.io/sasano8/kube-floatingtag-pinner`（amd64 / arm64 のコンテナイメージ）も公開する。ただし、このイメージでの実行は試していない。
-
-## 実行手順の例（`app-authorization-demo` で確かめる）
-
-1. 対象にする。Knative Service に annotation を付ける（`metadata.annotations`。`spec.template` ではない。
-   template を変えると新しい Revision ができてしまう）。
-
-   ```sh
-   kubectl annotate ksvc app-authorization-demo -n app-authorization-demo floatingtag-pinner/enabled=true
-   ```
-
-   Argo CD の selfHeal で戻されるなら、マニフェスト側にも同じ annotation を書く。
-
-2. **ドライランで見る**（何も pull しない。リモートとローカルを読むだけ）。
-
-   ```sh
-   ./pinner pull --dry-run --namespace app-authorization-demo   # Windows は pinner.exe
-   ```
-
-   `mismatch` に `outcome=would-pull` と出れば、ローカルのタグがリモートと違い、pull が必要。リモートの digest（`remote=`）と、ローカル（`local=`）を見比べる。
-
-3. 実際に pull する。
-
-   ```sh
-   ./pinner pull --namespace app-authorization-demo
-   ```
-
-4. ローカルのタグが新しくなったか確かめる。
-
-   ```sh
-   kubectl get nodes -o json | jq -r '.items[] | .metadata.name as $n | .status.images[]
-     | select(any(.names[]; contains("app-authorization-demo"))) | "\($n)\t\(.names | join(" "))"'
-   crane digest ghcr.io/sasano8/app-authorization-demo:latest     # リモートの digest
-   ```
-
-   `repo:latest` と同じエントリに、リモートの digest（`repo@sha256:…`）が載っていれば成功。
-   もう一度 `pull` を実行すると、`match` になる。
-
-5. 動いているものが、ローカルと違うかを調べる（`trigger`。何も変更しない）。
-
-   ```sh
-   ./pinner trigger --namespace app-authorization-demo
-   ```
-
-   Revision の digest がローカルのタグと違えば `mismatch`、同じなら `match` と出る。
-   Knative が scale to zero していて Pod が無くても、Revision の `imageDigest` と比べられる。
-
-## 実行例
-
-```sh
-./pinner pull                          # 1回だけ実行して終了（既定）
-./pinner pull --dry-run                # 何も pull せず、pull が必要なものだけ報告する
-./pinner pull --on-new=ignore          # 初見のイメージは pull せず、差分のあるものだけ同期する
-./pinner pull --floating-tags=latest,dev --namespace=tutorial --pull-secret=ghcr-pull
-./pinner pull --daemon --interval 5m   # 常駐して、5分ごとに繰り返す
-
-# 第二段階: 実行中のものがローカルと違うかを調べる（アクションは未指定なら none。何も変更しない）
-./pinner trigger
-./pinner trigger --namespace app-authorization-demo
-
-# 未実装（予定）
-./pinner sync --daemon                 # pull → trigger を、続けて繰り返す
-```
+- **第一段階（`pull`）: 状態が変化する。** `pull` は pull を自分で行い、そのあとローカルのタグを読み直して確かめる。
+  最初の状態と、pull したあとの状態を、続けて出す（`via=pulling`）。pull のあとも `mismatch` のままなら、そう出る
+  （pull の間にタグがさらに進んだ、など）。ノードの状態の更新は遅れるので、読み直しは最大 30 秒、数秒おきに繰り返す。
+- **第二段階（`trigger`）: 投げっぱなし。** 最初の状態を報告し、アクションを依頼する（`action requested`）だけで、
+  そのあと何が起きるかは Kubernetes の pull の仕組みに任せ、確かめない。結果は、次の実行で、新しい「最初の状態」として分かる。
 
 `pull` の出力は、イメージごとに 1 行のログ（次は形式の例。実クラスタで取った出力ではない）。
 
 ```
 level=INFO msg=match stage=pull image=ghcr.io/sasano8/app-authorization-demo:latest owners=[tutorial/Deployment/web] remote=sha256:bf16c8e0… local=[sha256:bf16c8e0…]
+
+# 違いがあって pull した: 状態が変化する
 level=WARN msg=mismatch stage=pull image=ghcr.io/sasano8/app-authorization-demo:latest owners=[app-authorization-demo/Service/app-authorization-demo] remote=sha256:bf16c8e0… local=[sha256:4a45bcf8…] outcome=pulled
+level=INFO msg=match stage=pull image=ghcr.io/sasano8/app-authorization-demo:latest owners=[app-authorization-demo/Service/app-authorization-demo] remote=sha256:bf16c8e0… local=[sha256:bf16c8e0…] via=pulling
+
+# --dry-run: 最初の状態だけ
 level=WARN msg=mismatch stage=pull image=ghcr.io/sasano8/app-authorization-demo:latest owners=[…] remote=sha256:bf16c8e0… local=[sha256:4a45bcf8…] outcome=would-pull
-level=WARN msg=not-pulled stage=pull image=docker.io/library/nginx:latest owners=[tutorial/Deployment/proxy] remote=sha256:… local=[] outcome=pulled
 ```
 
 `outcome` は、`pull` が違いに対してしたこと。
 
 | `outcome` | 意味 |
 | --- | --- |
-| `pulled` | pull した |
+| `pulled` | pull した（このあと、読み直した状態が続けて出る） |
 | `would-pull` | `--dry-run` のため、pull が必要だったことだけを報告した |
 | `ignored` | `not-pulled` で、`--on-new=ignore` のため、何もしなかった |
 | `pull-failed` | pull に失敗した（`error` として報告され、終了コードは非 0） |
@@ -278,7 +185,7 @@ level=WARN msg=not-pulled stage=trigger resource=tutorial/Deployment/proxy image
 level=INFO msg=not-running stage=trigger resource=tutorial/DaemonSet/agent image=ghcr.io/o/agent:latest hint="nothing to compare (scaled to zero, or no digest reported)"
 ```
 
-イベントの意味は上の表のとおり。`trigger` では、比べているのは、実行中の digest と、ローカルキャッシュ（ノードのイメージストア）のタグが指す digest。
+状態の意味は上の表のとおり。`trigger` では、比べているのは、実行中の digest と、ローカルキャッシュ（ノードのイメージストア）のタグが指す digest。
 `not-running` は、Pod が 0、Revision が未 ready、`imageID` に digest が無い、など。
 
 - Pod は、その Pod が動くノードのタグと比べる。複数の Pod のうち 1 つでも違えば `mismatch`（違う Pod ごとに `running=` に出る）。

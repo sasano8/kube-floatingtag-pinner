@@ -8,11 +8,11 @@ import (
 	"strings"
 )
 
-// DefaultAction is used when a resource names no action for an event: nothing is done.
+// DefaultAction is used when a resource names no action for a state: nothing is done.
 // (Every finding is logged anyway; see internal/report.)
 const DefaultAction = "none"
 
-// ActedOn are the events an action can be bound to (annotation on-<event>).
+// ActedOn are the states an action can be bound to (annotation on-<state>).
 // Only mismatch is the one most users need; not-pulled and error are optional and also default to none,
 // never to the mismatch action: with nothing to compare, acting blindly could repeat every pass.
 var ActedOn = []Status{StatusMismatch, StatusNotPulled, StatusError}
@@ -60,10 +60,19 @@ func (a *Actor) Act(ctx context.Context, f Finding) error {
 	}
 	if a.DryRun && name != DefaultAction {
 		slog.Info("dry-run: would run action", "resource", f.Resource.String(), "image", f.Image,
-			"event", string(f.Status), "action", name)
+			"state", string(f.Status), "action", name)
 		return nil
 	}
-	return ac.Do(ctx, f)
+	if err := ac.Do(ctx, f); err != nil {
+		return err
+	}
+	if name != DefaultAction {
+		// Fire and forget: what the action causes is up to Kubernetes, and is not followed.
+		// The next pass observes the new state.
+		slog.Info("action requested", "resource", f.Resource.String(), "image", f.Image,
+			"state", string(f.Status), "action", name)
+	}
+	return nil
 }
 
 func (a *Actor) names() string {

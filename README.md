@@ -56,7 +56,8 @@ flowchart TB
 
 **ローカルキャッシュを正**にして、**Kubernetes のリソース**を同期する段階。第一段階でローカルは最新になっているので、
 リモートレジストリは登場しない。比べるのは、ローカルのタグが指す digest と、実行中の Pod（Knative は Revision）が実際に使っている digest。
-不一致なら、そのリソースに指定されたアクションを実行する。核は「リソースがローカルより古いことの検知」で、何をするかはアクション次第。
+違っていれば、そのリソースに指定されたアクションを実行する。核は「リソースがローカルと違うことの検知」で、何をするかはアクション次第。
+（違う digest が古いのか新しいのかは分からない。ローカルを正にするのは方針で、新旧の事実ではない。）
 組み込みは、再デプロイにつながるもの（Pod の削除、Knative は新しい Revision の作成など）。spec の image は書き換えない。
 
 各リソースが実際にどのイメージで起動するかは **ベストエフォート**で、Kubernetes の pull の仕組みの結果に任せる。
@@ -168,7 +169,7 @@ CI は、あわせて `ghcr.io/sasano8/kube-floatingtag-pinner`（amd64 / arm64 
    ./pinner pull --dry-run --namespace app-authorization-demo   # Windows は pinner.exe
    ```
 
-   `changed (dry-run: would pull)` と出れば、ローカルのタグが古い。リモートの digest（`remote=`）と、ローカル（`local=`）を見比べる。
+   `changed (dry-run: would pull)` と出れば、ローカルのタグがリモートと違う。リモートの digest（`remote=`）と、ローカル（`local=`）を見比べる。
 
 3. 実際に pull する。
 
@@ -187,13 +188,13 @@ CI は、あわせて `ghcr.io/sasano8/kube-floatingtag-pinner`（amd64 / arm64 
    `repo:latest` と同じエントリに、リモートの digest（`repo@sha256:…`）が載っていれば成功。
    もう一度 `pull` を実行すると、`unchanged` になる。
 
-5. 動いているものが古いかを調べる（`trigger`。何も変更しない）。
+5. 動いているものが、ローカルと違うかを調べる（`trigger`。何も変更しない）。
 
    ```sh
    ./pinner trigger --namespace app-authorization-demo
    ```
 
-   Revision がローカルより古ければ、`stale` と出る。新しい Revision ができていれば `in-sync`。
+   Revision の digest がローカルのタグと違えば `mismatch`、同じなら `match` と出る。
    Knative が scale to zero していて Pod が無くても、Revision の `imageDigest` と比べられる。
 
 ## 実行例
@@ -205,7 +206,7 @@ CI は、あわせて `ghcr.io/sasano8/kube-floatingtag-pinner`（amd64 / arm64 
 ./pinner pull --floating-tags=latest,dev --namespace=tutorial --pull-secret=ghcr-pull
 ./pinner pull --daemon --interval 5m   # 常駐して、5分ごとに繰り返す
 
-# 第二段階: 実行中のものがローカルより古いかを調べる（現状は info のみ。何も変更しない）
+# 第二段階: 実行中のものがローカルと違うかを調べる（現状は info のみ。何も変更しない）
 ./pinner trigger
 ./pinner trigger --namespace app-authorization-demo
 
@@ -223,7 +224,7 @@ level=WARN msg=new       image=docker.io/library/nginx:latest owners=[tutorial/D
 ```
 
 - `unchanged`: ローカルのタグがリモートと同じ digest を指している。
-- `changed`: ローカルのタグが別の digest を指していた（古い）。リモートの内容で同期した（`pulled=true`）。
+- `changed`: ローカルのタグが別の digest を指していた（リモートと違う）。リモートの内容で同期した（`pulled=true`）。
 - `new`: ローカルがそのタグを持っていなかった。`--on-new=register`（既定）なら pull する。`ignore` なら `ignored` と出して何もしない。
 - `(dry-run: would pull)`: `--dry-run` のとき、pull が必要だったもの（pull はしていない）。
 - 1 つでも失敗（認証、タイムアウトなど）があると、終了コードは非 0。
@@ -231,16 +232,24 @@ level=WARN msg=new       image=docker.io/library/nginx:latest owners=[tutorial/D
 `trigger` の出力は、リソースとイメージごとに 1 行（これも形式の例）。
 
 ```
-level=INFO msg=in-sync resource=tutorial/Deployment/web image=ghcr.io/sasano8/app-authorization-demo:latest local=[sha256:bf16c8e0…]
-level=WARN msg=stale resource=app-authorization-demo/Service/app-authorization-demo image=ghcr.io/sasano8/app-authorization-demo:latest running=revision=sha256:4a45bcf8… local=[sha256:bf16c8e0…]
-level=INFO msg="no-local: the local cache does not hold this tag (run pull first)" resource=tutorial/Deployment/proxy image=docker.io/library/nginx:latest
-level=INFO msg="no-running: nothing to compare (scaled to zero, or no digest reported)" resource=tutorial/DaemonSet/agent image=ghcr.io/o/agent:latest
+level=INFO msg=match resource=tutorial/Deployment/web image=ghcr.io/sasano8/app-authorization-demo:latest local=[sha256:bf16c8e0…]
+level=WARN msg=mismatch resource=app-authorization-demo/Service/app-authorization-demo image=ghcr.io/sasano8/app-authorization-demo:latest running=revision=sha256:4a45bcf8… local=[sha256:bf16c8e0…]
+level=INFO msg="not-pulled: the local cache does not hold this tag (run pull first)" resource=tutorial/Deployment/proxy image=docker.io/library/nginx:latest
+level=INFO msg="not-running: nothing to compare (scaled to zero, or no digest reported)" resource=tutorial/DaemonSet/agent image=ghcr.io/o/agent:latest
 ```
 
-- `in-sync`: 動いているものが、ローカルのタグが指す digest と同じ。
-- `stale`: 動いているものが、ローカルのタグの指す digest と違う。アクション（現状は `info` のログ）が実行された。
-- `no-local`: ローカルがそのタグを持っていない。先に `pull` を実行する。
-- `no-running`: 比べる相手が無い（Pod が 0、Revision がまだ ready でない、など）。
+比べているのは、実行中の digest と、ローカルキャッシュ（ノードのイメージストア）のタグが指す digest。
+
+| ステータス | 意味 | アクション |
+| --- | --- | --- |
+| `match` | 実行中の digest が、ローカルのタグの digest と一致する | 実行しない |
+| `mismatch` | 一致しない。**新しいのか古いのかは分からない**（違うことだけが分かる） | 実行する（annotation の指定。未指定は `info`） |
+| `not-pulled` | ローカルキャッシュが、そのタグを持っていない。先に `pull` を実行する | 実行しない |
+| `not-running` | 比べる相手（実行中の Pod / Revision の digest）が無い（Pod が 0、Revision が未 ready、`imageID` に digest が無い、など） | 実行しない |
+| `error` | 比較の途中で失敗した（権限、取得の失敗など）。1 つでもあると終了コードは非 0 | 実行しない |
+
+- Pod は、その Pod が動くノードのタグと比べる。複数の Pod のうち 1 つでも違えば `mismatch`（違う Pod ごとに `running=` に出る）。
+- Knative の Revision は、ローカル全体のタグと比べる。
 
 | フラグ | 既定値 | 説明 |
 | --- | --- | --- |

@@ -1,5 +1,5 @@
 // Package trigger is stage 2: with the local cache as the source of truth, find the
-// resources that run an older image than the local cache holds, and hand each one to
+// resources that run a different image than the local cache holds, and hand each one to
 // the Action its annotation names. Detection is separate from what is done about it.
 // See docs/design.md.
 package trigger
@@ -46,26 +46,26 @@ type LocalReader interface {
 type Status string
 
 const (
-	StatusInSync    Status = "in-sync"
-	StatusStale     Status = "stale"      // something runs a digest the local tag no longer points to
-	StatusNoLocal   Status = "no-local"   // the local cache does not hold the tag (run pull first)
-	StatusNoRunning Status = "no-running" // no Pod / Revision digest to compare (e.g. scaled to zero)
-	StatusError     Status = "error"
+	StatusMatch      Status = "match"
+	StatusMismatch   Status = "mismatch"    // something runs a digest the local tag does not point to (older or newer: unknown)
+	StatusNotPulled  Status = "not-pulled"  // the local cache does not hold the tag (run pull first)
+	StatusNotRunning Status = "not-running" // no Pod / Revision digest to compare (e.g. scaled to zero)
+	StatusError      Status = "error"
 )
 
-// Staleness is one running digest that differs from what the local cache holds.
-type Staleness struct {
+// Mismatch is one running digest that differs from what the local cache holds.
+type Mismatch struct {
 	Running
 	Want []string
 }
 
 type Finding struct {
 	Resource
-	Image  string
-	Status Status
-	Local  []string // union over nodes
-	Stale  []Staleness
-	Err    error
+	Image      string
+	Status     Status
+	Local      []string // union over nodes
+	Mismatches []Mismatch
+	Err        error
 }
 
 type Detector struct {
@@ -107,7 +107,7 @@ func (d *Detector) check(ctx context.Context, res Resource, image string, byNode
 	}
 	f.Local = union(byNode)
 	if len(f.Local) == 0 {
-		f.Status = StatusNoLocal
+		f.Status = StatusNotPulled
 		return f
 	}
 	running, err := d.Running.Running(ctx, res, image)
@@ -116,7 +116,7 @@ func (d *Detector) check(ctx context.Context, res Resource, image string, byNode
 		return f
 	}
 	if len(running) == 0 {
-		f.Status = StatusNoRunning
+		f.Status = StatusNotRunning
 		return f
 	}
 	for _, r := range running {
@@ -125,12 +125,12 @@ func (d *Detector) check(ctx context.Context, res Resource, image string, byNode
 			want = byNode[r.Node] // a Pod is compared with the node it runs on
 		}
 		if len(want) > 0 && !contains(want, r.Digest) {
-			f.Stale = append(f.Stale, Staleness{Running: r, Want: want})
+			f.Mismatches = append(f.Mismatches, Mismatch{Running: r, Want: want})
 		}
 	}
-	f.Status = StatusInSync
-	if len(f.Stale) > 0 {
-		f.Status = StatusStale
+	f.Status = StatusMatch
+	if len(f.Mismatches) > 0 {
+		f.Status = StatusMismatch
 	}
 	return f
 }

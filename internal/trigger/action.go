@@ -11,29 +11,29 @@ import (
 // DefaultAction is used when a resource names no action: it only reports.
 const DefaultAction = "info"
 
-// Action is what is done about a stale finding. The detection does not depend on it.
+// Action is what is done about a mismatch finding. The detection does not depend on it.
 type Action interface {
 	Name() string
 	Supports(kind string) bool
 	Do(ctx context.Context, f Finding) error
 }
 
-// Info logs that the resource is stale. It changes nothing.
+// Info logs that what runs differs from the local cache. It changes nothing.
 type Info struct{}
 
 func (Info) Name() string         { return "info" }
 func (Info) Supports(string) bool { return true }
 func (Info) Do(_ context.Context, f Finding) error {
 	var running []string
-	for _, s := range f.Stale {
+	for _, s := range f.Mismatches {
 		who := s.Pod
 		if who == "" {
 			who = "revision"
 		}
 		running = append(running, fmt.Sprintf("%s=%s", who, s.Digest))
 	}
-	slog.Warn("stale", "resource", f.Resource.String(), "image", f.Image,
-		"running", strings.Join(running, ","), "local", f.Stale[0].Want)
+	slog.Warn("mismatch", "resource", f.Resource.String(), "image", f.Image,
+		"running", strings.Join(running, ","), "local", f.Mismatches[0].Want)
 	return nil
 }
 
@@ -44,7 +44,7 @@ func (None) Name() string                      { return "none" }
 func (None) Supports(string) bool              { return true }
 func (None) Do(context.Context, Finding) error { return nil }
 
-// Actor picks the action a resource names and runs it on its stale findings.
+// Actor picks the action a resource names and runs it on its mismatch findings.
 type Actor struct {
 	actions map[string]Action
 	// ForceInfo runs every action as info (a dry run for the whole pass).

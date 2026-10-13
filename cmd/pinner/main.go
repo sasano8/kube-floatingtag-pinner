@@ -1,7 +1,7 @@
 // Command pinner keeps what runs in Kubernetes in step with the floating tags
 // (e.g. :latest) of the remote registry, in two stages: pull syncs the local cache
 // (node image stores) from the remote registry; trigger finds the resources that run
-// an older image than the local cache holds and hands them to their action.
+// a different image than the local cache holds and hands them to their action.
 package main
 
 import (
@@ -31,7 +31,7 @@ const usage = `usage: pinner <command> [flags]
 
 commands:
   pull      stage 1: pull into the local cache (node image stores) what changed on the remote registry
-  trigger   stage 2: find resources running an older image than the local cache, and run their action
+  trigger   stage 2: find resources running a different image than the local cache, and run their action
 `
 
 // common holds the flags shared by every command.
@@ -194,7 +194,7 @@ func pullPass(ctx context.Context, c *collector.Collector) bool {
 	return ok
 }
 
-// triggerPass detects stale resources and hands each to its action. It reports whether it succeeded.
+// triggerPass detects resources whose digest differs from the local cache and hands each to its action. It reports whether it succeeded.
 func triggerPass(ctx context.Context, d *trigger.Detector, actor *trigger.Actor) bool {
 	findings, err := d.Detect(ctx)
 	if err != nil {
@@ -208,15 +208,15 @@ func triggerPass(ctx context.Context, d *trigger.Detector, actor *trigger.Actor)
 		case trigger.StatusError:
 			ok = false
 			slog.Error("failed", append(attrs, "err", f.Err)...)
-		case trigger.StatusStale:
+		case trigger.StatusMismatch:
 			if err := actor.Act(ctx, f); err != nil {
 				ok = false
 				slog.Error("action failed", append(attrs, "err", err)...)
 			}
-		case trigger.StatusNoLocal:
-			slog.Info("no-local: the local cache does not hold this tag (run pull first)", attrs...)
-		case trigger.StatusNoRunning:
-			slog.Info("no-running: nothing to compare (scaled to zero, or no digest reported)", attrs...)
+		case trigger.StatusNotPulled:
+			slog.Info("not-pulled: the local cache does not hold this tag (run pull first)", attrs...)
+		case trigger.StatusNotRunning:
+			slog.Info("not-running: nothing to compare (scaled to zero, or no digest reported)", attrs...)
 		default:
 			slog.Info(string(f.Status), append(attrs, "local", f.Local)...)
 		}

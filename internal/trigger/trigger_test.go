@@ -53,16 +53,16 @@ func TestPodComparedWithItsOwnNode(t *testing.T) {
 		},
 	}}
 	f := detect(t, local, running, deploy("web"))[0]
-	if f.Status != trigger.StatusStale || len(f.Stale) != 1 || f.Stale[0].Pod != "web-2" ||
-		!reflect.DeepEqual(f.Stale[0].Want, []string{"sha256:A"}) {
+	if f.Status != trigger.StatusMismatch || len(f.Mismatches) != 1 || f.Mismatches[0].Pod != "web-2" ||
+		!reflect.DeepEqual(f.Mismatches[0].Want, []string{"sha256:A"}) {
 		t.Fatalf("%+v", f)
 	}
 }
 
-func TestInSync(t *testing.T) {
+func TestMatch(t *testing.T) {
 	local := fakeLocal{img: {"n1": {"sha256:B"}}}
 	running := fakeRunning{byRes: map[string][]trigger.Running{"web": {{Digest: "sha256:B", Node: "n1", Pod: "web-1"}}}}
-	if f := detect(t, local, running, deploy("web"))[0]; f.Status != trigger.StatusInSync {
+	if f := detect(t, local, running, deploy("web"))[0]; f.Status != trigger.StatusMatch {
 		t.Fatalf("%+v", f)
 	}
 }
@@ -70,22 +70,22 @@ func TestInSync(t *testing.T) {
 func TestRevisionComparedWithLocalUnion(t *testing.T) {
 	local := fakeLocal{img: {"n1": {"sha256:B"}, "n2": {"sha256:B"}}}
 	ksvc := trigger.Resource{Kind: "Service", Namespace: "ns", Name: "k", Images: []string{img}}
-	stale := fakeRunning{byRes: map[string][]trigger.Running{"k": {{Digest: "sha256:A"}}}}
-	if f := detect(t, local, stale, ksvc)[0]; f.Status != trigger.StatusStale {
+	differs := fakeRunning{byRes: map[string][]trigger.Running{"k": {{Digest: "sha256:A"}}}}
+	if f := detect(t, local, differs, ksvc)[0]; f.Status != trigger.StatusMismatch {
 		t.Fatalf("%+v", f)
 	}
 	fresh := fakeRunning{byRes: map[string][]trigger.Running{"k": {{Digest: "sha256:B"}}}}
-	if f := detect(t, local, fresh, ksvc)[0]; f.Status != trigger.StatusInSync {
+	if f := detect(t, local, fresh, ksvc)[0]; f.Status != trigger.StatusMatch {
 		t.Fatalf("%+v", f)
 	}
 }
 
 func TestNoLocalAndNoRunning(t *testing.T) {
-	if f := detect(t, fakeLocal{}, fakeRunning{}, deploy("web"))[0]; f.Status != trigger.StatusNoLocal {
+	if f := detect(t, fakeLocal{}, fakeRunning{}, deploy("web"))[0]; f.Status != trigger.StatusNotPulled {
 		t.Fatalf("%+v", f)
 	}
 	local := fakeLocal{img: {"n1": {"sha256:B"}}}
-	if f := detect(t, local, fakeRunning{}, deploy("web"))[0]; f.Status != trigger.StatusNoRunning {
+	if f := detect(t, local, fakeRunning{}, deploy("web"))[0]; f.Status != trigger.StatusNotRunning {
 		t.Fatalf("%+v", f)
 	}
 }
@@ -114,7 +114,7 @@ func TestActorPicksActionByAnnotation(t *testing.T) {
 	info, other := &recorder{name: "info"}, &recorder{name: "other"}
 	a := trigger.NewActor(info, other)
 
-	f := trigger.Finding{Resource: trigger.Resource{Kind: "Deployment", Name: "d"}, Stale: []trigger.Staleness{{}}}
+	f := trigger.Finding{Resource: trigger.Resource{Kind: "Deployment", Name: "d"}, Mismatches: []trigger.Mismatch{{}}}
 	if err := a.Act(context.Background(), f); err != nil || len(info.got) != 1 {
 		t.Fatalf("default must be info: %v %d", err, len(info.got))
 	}

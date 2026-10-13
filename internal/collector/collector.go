@@ -67,7 +67,7 @@ const (
 	StatusNew       Status = "new"       // local does not hold the tag; handled per OnNew
 	StatusIgnored   Status = "ignored"   // new, and OnNew is ignore
 	StatusUnchanged Status = "unchanged" // the local tag points to the remote digest
-	StatusChanged   Status = "changed"   // the local tag points elsewhere (stale)
+	StatusChanged   Status = "changed"   // the local tag points to a different digest than the remote
 	StatusError     Status = "error"
 )
 

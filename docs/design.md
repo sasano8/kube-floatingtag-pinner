@@ -193,7 +193,7 @@ Pod から取るのは「タグ」と「digest」の両方。タグはどのロ�
 
 - 検知（`internal/trigger` の `Detector`）: 実装済み。リソースの収集（`source.Kube.Resources`）、
   ノードごとのローカルのタグの digest（`local.Node.NodeTagDigests`）、実行中の digest（`source.KubeRunning`）を比べる。
-  Pod はそのノードのタグと、Revision はローカル全体のタグと比べる。結果は `in-sync` / `stale` / `no-local` / `no-running` / `error`。
+  Pod はそのノードのタグと、Revision はローカル全体のタグと比べる。結果は `match` / `mismatch` / `not-pulled` / `not-running` / `error`。
 - アクター（`Actor`）とアクション: `info`（既定）と `none` だけ実装済み。アクション名が未実装のときは、エラーにする。
 - `trigger --dry-run`: 実装済み。どのアクションも `info` として扱う。
 - 未実装: `delete-pods`、`restart`、`new-revision`、`sync`（pull → trigger）。
@@ -201,7 +201,8 @@ Pod から取るのは「タグ」と「digest」の両方。タグはどのロ�
 
 ### アクター（Actor）とアクション（Action）
 
-第二段階の核は、**「リソースがローカルキャッシュより古い、ことの検知」**。何をするかは**アクション**として切り離し、それを実行する側を**アクター**と呼ぶ（Actor が Action を実行する）。
+第二段階の核は、**「リソースがローカルキャッシュと違うことの検知」**。違う digest が古いのか新しいのかは分からない
+（ローカルを正にするのは方針で、新旧の事実ではない）。何をするかは**アクション**として切り離し、それを実行する側を**アクター**と呼ぶ（Actor が Action を実行する）。
 コマンド名も `redeploy` ではなく、中立な `trigger`（きっかけを作るだけで、結果は保証しない）にしてある。再デプロイにつながる操作が組み込まれているのは、
 このプロジェクトに相性がよいためで、アクションの種類を再デプロイに限る意図はない。
 
@@ -220,7 +221,7 @@ Pod から取るのは「タグ」と「digest」の両方。タグはどのロ�
 | --- | --- | --- | --- |
 | `none` | すべて | 何もしない | 無し |
 | `info`（既定） | すべて | 差分があることをログに出す | 無し |
-| `delete-pods` | Deployment / StatefulSet / DaemonSet | 古い Pod を削除する（ReplicaSet 等が作り直す） | 無し |
+| `delete-pods` | Deployment / StatefulSet / DaemonSet | ローカルと違う Pod を削除する（ReplicaSet 等が作り直す） | 無し |
 | `restart` | Deployment / StatefulSet / DaemonSet | Pod テンプレートに `restartedAt` の annotation を付けて、段階的に入れ替える | annotation を 1 つ足す |
 | `new-revision` | Knative Service | ksvc の `spec.template` に annotation を足し、新しい Revision を作る | annotation を 1 つ足す |
 

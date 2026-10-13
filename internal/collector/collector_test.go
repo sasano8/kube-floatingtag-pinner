@@ -91,7 +91,7 @@ func TestPullNotImplementedIsReported(t *testing.T) {
 	}
 }
 
-// The tag differs between nodes: some already at the remote digest, some stale.
+// The tag differs between nodes: some already at the remote digest, some not.
 func TestTagDivergedAcrossNodesIsChanged(t *testing.T) {
 	loc := &fakeLocal{have: []string{"sha256:a", "sha256:b"}}
 	if r := run(t, loc, collector.OnNewRegister); r.Status != collector.StatusChanged || !r.Pulled {

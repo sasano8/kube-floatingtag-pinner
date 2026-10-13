@@ -47,7 +47,7 @@ type Kube struct {
 	FloatingTags []string
 }
 
-// ActionAnnotation names the action a resource wants when it runs a stale image.
+// ActionAnnotation names the action a resource wants when what it runs differs from the local cache.
 const ActionAnnotation = "floatingtag-pinner/action"
 
 // Resources lists the annotated resources with their floating-tag images.

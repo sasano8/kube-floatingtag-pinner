@@ -25,7 +25,7 @@
 | ローカルキャッシュ | Kubernetes が pull して各ノードに保持しているイメージ（containerd 等のイメージストア）。Harbor のようなレジストリを建てるものではない。同期先に任意のレジストリを使う形も将来は想定 | ○ | ○ |
 | Kubernetes リソース | 所定の annotation が付いた Deployment / StatefulSet / DaemonSet / Knative Service。参照元 | ○ | ○ |
 | コレクター | 第一段階: リソースからイメージを収集し、リモートレジストリとローカルキャッシュを比較、差分があれば pull。第二段階: ローカルキャッシュの digest と、実行中の Pod / Revision の digest を比較し、差分を検知 | ○ | ○ |
-| アクション | 検知した差分に対して、リソースの annotation で指定されたアクションを実行する。組み込みは再デプロイにつながるもの（Deployment 等は Pod の削除や再ロールアウト、Knative は新 Revision の作成）。`none` は検知とログだけ | | ○ |
+| アクター（Actor） | 検知した差分に対して、リソースの annotation で指定されたアクション（Action）を実行する。組み込みは再デプロイにつながるもの（Deployment 等は Pod の削除や再ロールアウト、Knative は新 Revision の作成）。`none` は検知とログだけ | | ○ |
 
 > 第二段階ではリモートレジストリとの直接のやり取りは行わない。ローカルキャッシュの digest と、実行中の Pod の `imageID`（Knative は Revision の `imageDigest`）を比べ、不一致ならアクションを実行する。
 > spec の image は書き換えない。
@@ -68,7 +68,7 @@ flowchart TB
     K["Kubernetes リソース<br/>(annotation 付き)"]
     C["コレクター"]
     L[("ローカルキャッシュ<br/>(各ノードのイメージストア)")]
-    D["アクション"]
+    D["アクター"]
 
     C -- "① 対象イメージを収集" --> K
     C -- "② ローカルの digest を取得" --> L

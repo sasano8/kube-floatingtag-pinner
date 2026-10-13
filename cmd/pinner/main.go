@@ -61,6 +61,7 @@ type common struct {
 	dryRun    *bool
 	logLevel  *string
 	logStates *string
+	digestLen *int
 }
 
 func registerCommon(fs *flag.FlagSet, dryRunHelp string) *common {
@@ -71,6 +72,7 @@ func registerCommon(fs *flag.FlagSet, dryRunHelp string) *common {
 		interval:  fs.Duration("interval", 5*time.Minute, "with --daemon: time between passes"),
 		dryRun:    fs.Bool("dry-run", false, dryRunHelp),
 		logLevel:  fs.String("log-level", "info", "log level threshold: debug|info|warn|error (match, not-running = info; mismatch, not-pulled = warn; error = error)"),
+		digestLen: fs.Int("digest-length", report.DefaultDigestLength, "hex characters of a sha256 digest to show in the log, then \"...\" (0 = the whole digest)"),
 		logStates: fs.String("log-states", "", "comma-separated states to log (default: all): match, mismatch, not-pulled, error; trigger also not-running"),
 	}
 }
@@ -204,7 +206,10 @@ func setupLogging(c *common, stage string, allowed ...report.State) report.Repor
 	if err != nil {
 		fatal(err)
 	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level:       level,
+		ReplaceAttr: report.ShortenDigests(*c.digestLen),
+	})))
 	states, err := report.ParseStates(*c.logStates, allowed...)
 	if err != nil {
 		fatal(err)
@@ -259,12 +264,7 @@ func pullPass(ctx context.Context, c *collector.Collector, rep report.Reporter) 
 			rep.Emit(ctx, report.State(r.Status), attrs...)
 			if r.Pulled {
 				after := []any{"image", r.Image, "owners", r.Owners, "remote", r.Remote, "local", r.AfterLocal, "via", "pulling"}
-				if r.AfterErr != nil {
-					ok = false
-					rep.Emit(ctx, report.Error, append(after, "err", r.AfterErr)...)
-				} else {
-					rep.Emit(ctx, report.State(r.After), after...)
-				}
+				rep.Emit(ctx, report.State(r.After), after...)
 			}
 		}
 	}

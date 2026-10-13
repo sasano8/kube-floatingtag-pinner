@@ -21,6 +21,7 @@ pinner pull [flags]
 | --- | --- | --- | --- |
 | `--annotation` | string | `floatingtag-pinner/enabled` | annotation that marks target resources |
 | `--daemon` | bool | `false` | keep running: repeat every --interval until stopped (default: run once and exit) |
+| `--digest-length` | int | `12` | hex characters of a sha256 digest to show in the log, then "..." (0 = the whole digest) |
 | `--dry-run` | bool | `false` | report what would be pulled, without pulling |
 | `--floating-tags` | string | `latest` | comma-separated tags to track; images with other tags are ignored (empty = all tags) |
 | `--interval` | duration | `5m0s` | with --daemon: time between passes |

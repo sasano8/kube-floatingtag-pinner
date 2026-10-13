@@ -108,7 +108,7 @@ digest だけでタグが付いていないものは見ない（使われると�
 今は呼ぶたびに Node を取得し直す（再スキャン）。結果を保持して高速化する形は、`Local` を包む形で後から付け替えられる。
 現状は再スキャンのみ。
 
-## 5. pull の仕組み [実装済み・実機は未確認]
+## 5. pull の仕組み [実装済み・実機で確認済み]
 
 ### 方式
 
@@ -238,12 +238,20 @@ Pod から取るのは「タグ」と「digest」の両方。タグはどのロ�
   単体実行でも、`sync`（続けて実行）でも、形式が揃う。接頭辞は、`msg` の先頭に付ける（`stage` の項目にはしない。重複するため）。
   状態でない行（`trigger action requested`、`collect failed` など）にも付ける。
 - **「イベント」ではなく「状態」と呼ぶ。** `match` などは、比べた結果の状態で、第一段階はそれが変化し、第二段階は 1 回だけ観測する。
-- **第一段階は、状態が変化する。** `pull` が pull を自分で行うので、そのあとにローカルのタグを読み直して確かめる
-  （`mismatch` → `match`、`via=pulling`）。「pull の依頼が成功した」ことと、「ノードのタグがリモートの digest を指すようになった」ことは別。
-  確かめないと、次の場合に、揃っていないのに「pulled」と報告してしまう: pull の間にリモートがさらに進んで、別の digest を取ってきた
-  （タグ指定で pull するため）／ノードの状態の更新が遅れていて、まだ付け替わって見えない。
-  ノードの `status.images` は、kubelet が定期的に状態を更新したときに変わる（既定で 10 秒程度）ので、読み直しは最大 30 秒、2 秒おきに繰り返す。
-  それでも揃わなければ、`mismatch`（または `not-pulled`）のままと報告する。
+- **第一段階は、状態が変化する。** `pull` が pull を自分で行うので、そのあとの状態を報告する（`mismatch` → `match`、`via=pulling`）。
+  「pull の依頼が成功した」ことと、「ノードのタグがリモートの digest を指すようになった」ことは別で、
+  pull の間にリモートがさらに進んで、別の digest を取ってきた（タグ指定で pull するため）ことがありうる。
+  そこで、pull のあとの状態は、**pull 用 Pod が報告した digest**（`containerStatuses[].imageID`）から求める:
+  すべてのノードがリモートの digest を報告したら `match`、別の digest があれば `mismatch`、何も報告されなければ `not-pulled`。
+  pull 用 Pod の `imageID` は、pull が済んだ時点で分かる、正確な情報。
+- **`Node.status.images` を読み直して確かめない理由（実機で分かったこと）。** 最初は、pull のあとに `Node.status.images` を読み直し、
+  最大 30 秒、2 秒おきに繰り返す、という設計だった（kubelet が 10 秒程度で更新すると想定していた）。実機では、pull は成功していたのに、
+  30 秒後も、タグが見えなかった。kubelet が `Node.status.images` に載せる一覧は、kubelet の内部のキャッシュから作られ、
+  そのキャッシュは、数分ごとにしか更新されない、と考えている（kubelet のコードの理解。実機で、数分後に載ることを確かめる）。
+  読み直しにすると、うまくいった pull を、失敗と判断する。
+- **この遅れの影響が残るところ**: ローカルの状態を読むのは、`Node.status.images` から（`TagDigests`、`NodeTagDigests`）。
+  `pull` の直後（数分以内）に、もう一度 `pull` や `trigger` を実行すると、まだ `not-pulled` / `mismatch` と見えることがある。
+  pull は、すでにあるイメージには何もしない（安い）ので、害は小さい。しばらく待てば、`match` になる。
 - **第二段階は、投げっぱなし。** 最初の状態を報告し、アクションを依頼する（`trigger action requested`）だけで、結果は追わない。
   アクションの結果は Kubernetes の pull の仕組みが決めるので、確かめようがない（ベストエフォート）。次の実行で、新しい状態として分かる。
 - `--log-level`（下限）と `--log-states`（出す状態）で、実行時に絞る。そのコマンドが出さない状態の指定は、起動時にエラー。
@@ -286,7 +294,7 @@ Pod から取るのは「タグ」と「digest」の両方。タグはどのロ�
 | アクション | 状態 | 対象 | 操作 | spec への影響 |
 | --- | --- | --- | --- | --- |
 | `none`（既定） | 実装済み | すべて | 何もしない（見つけたことは、ログに出る） | 無し |
-| `rollout` | 実装済み・実機は未確認 | Deployment / StatefulSet / DaemonSet / Knative Service | Pod テンプレートに annotation を足して、新しい世代を出す | annotation を 1 つ足す |
+| `rollout` | 実装済み・Knative は実機で確認済み（Deployment 等は未確認） | Deployment / StatefulSet / DaemonSet / Knative Service | Pod テンプレートに annotation を足して、新しい世代を出す | annotation を 1 つ足す |
 | `delete-pods` | 実装済み・実機は未確認 | Deployment / StatefulSet / DaemonSet | `mismatch` だった Pod だけを削除する（ReplicaSet 等が作り直す） | 無し |
 
 **アクションは「意図」で名付け、種類ごとの違いは、対象の処理に持たせる。**
@@ -295,7 +303,7 @@ Deployment 等の「ローリング更新」と、Knative の「新しい Revisi
 そこで、`restart` と `new-revision` を別のアクションにせず、`rollout`（新しい世代を出す）にまとめた。
 `delete-pods` は、Knative には対応しない（`Supports(kind)` が、対応しない組み合わせをエラーにする）。
 
-- Knative で、テンプレートの annotation の変更が新しい Revision を作ることは、ソースの読みでは確かめた（[research.md](./research.md) の 4 章）。実機は未確認。
+- Knative で、テンプレートの annotation の変更が新しい Revision を作ることは、ソースの読みで確かめ、**実機でも確認した**（[research.md](./research.md) の 4 章。Revision `00007` の `4a45bcf8…` → `rollout` で `00008` の `bf16c8e0…`）。
 - annotation の key は `floatingtag-pinner/restartedAt`（値は UTC の時刻、秒単位）。`kubectl rollout restart` の
   `kubectl.kubernetes.io/restartedAt` とは別にして、kubectl との衝突を避ける。
   同じ resource の 2 つの finding（たとえば 2 つの image）が同じ秒に patch しても、同じ値なので、2 回目は何も変えず、rollout は 1 回で済む。
@@ -382,20 +390,22 @@ Knative は、Revision を作ると、そのときリモートに問い合わせ
 
 - e2e はローカルレジストリを使う: 同じタグに別の内容を 2 回 push すれば「リモートのタグが動いた」状況を作れる。rate limit、認証の影響も受けない。
   kind のノードの containerd に、`localhost:5001` をローカルレジストリへ向ける設定を入れる（kind の公式の手順）。
-- ノードの `status.images` の更新の遅れ（pull 後の読み直しを繰り返す理由）は、kind でも再現される。e2e が、その確認になる。
+- ノードの `status.images` の更新の遅れ（数分。pull のあとの状態を、pull 用 Pod が報告した digest から求める理由）は、kind でも再現されるはず。
+  e2e は、ローカルの状態を読むステップの前に、`status.images` に反映されるまで待つ（`pull --dry-run` が `match` になるまで繰り返す）。
 - Knative（Revision の `imageDigest`）は、Knative Serving のインストールが重いので、e2e の対象外。単体テストのみ。
 
 ## 10. 実機で確認が必要な前提 [未確認]
 
-実機では、第一段階のコード全体が未確認。特に次の点を見る。
+実機で確認できたこと: `collect`、`pull`（pull 用 Pod、タグの付け替わり）、`trigger` の `mismatch` の検知、Knative の `rollout`（2026-10-14）。
+未確認の点は、次のとおり。
 
-1. pull 用 Pod（存在しないコマンド）で、使っているランタイムが pull だけ行い、`imageID` を返すか。
-2. `Node.status.images` の名前の並び（`repo:latest` と `repo@sha256:…` が同じエントリに載るか）。
+1. （確認済み）pull 用 Pod（存在しないコマンド）で、使っているランタイムが pull だけ行い、`imageID` を返すこと。
+2. （確認済み）`Node.status.images` の名前の並び（`repo:latest` と `repo@sha256:…` が同じエントリに載ること）。pull の数分後に反映された。
 3. マルチアーキ: リモートで取る digest はタグ全体（index）の digest。ノードの名前や Pod の `imageID` も、同じ index の digest か。
    個別（platform）の digest が載るランタイムだと、新しいのに「不一致」と判定される。その場合は、ノードの OS とアーキに対応する
    個別の digest を引いて比べる方式に切り替える。アーキごとの digest は取れるが、今は使っていない。
    タグ全体の digest は、どのアーキが変わっても変わるので、「タグが動いたか」の検知は、これで足りる。
-4. Knative: ksvc の `spec.template` への annotation で、新しい Revision ができ、タグが解決し直されること。
+4. （確認済み）Knative: ksvc の `spec.template` への annotation で、新しい Revision ができ、タグが解決し直されること。
 5. 非公開レジストリでの認証（digest 取得と pull）。rate limit は [research.md](./research.md) のとおり、digest の取得は数えられない。
 6. `Node.status.images` が 1 ノード 50 件まで（kubelet の既定）のため、全ノードの和集合で見ても、載らないことがある。
 

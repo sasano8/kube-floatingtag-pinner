@@ -1,0 +1,24 @@
+site_name: kube-floatingtag-pinner
+site_description: Keep what runs in Kubernetes in step with the floating tags (e.g. :latest) of the remote registry.
+docs_dir: .site-src  # made by scripts/prepare-docs-site.sh
+site_dir: site
+theme:
+  name: material
+  language: ja
+nav:
+  - ホーム: index.md
+  - コマンドライン:
+      - cli/index.md
+      - collect: cli/collect.md
+      - pull: cli/pull.md
+      - trigger: cli/trigger.md
+  - 設計: design.md
+  - 調査: research.md
+markdown_extensions:
+  - tables
+  - admonition
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format

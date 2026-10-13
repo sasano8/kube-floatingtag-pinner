@@ -239,20 +239,9 @@ level=INFO msg="trigger not-running" resource=tutorial/DaemonSet/agent image=ghc
 - Pod は、その Pod が動くノードのタグと比べる。複数の Pod のうち 1 つでも違えば `mismatch`（違う Pod ごとに `running=` に出る）。
 - Knative の Revision は、ローカル全体のタグと比べる。
 
-| フラグ | 既定値 | 説明 |
-| --- | --- | --- |
-| `--local` | `node` | ローカルキャッシュの種類。現状は `node`（ノードのイメージストア）のみ |
-| `--floating-tags` | `latest` | 追う（フローティング）タグ。カンマ区切り。これ以外のタグは固定とみなして無視。空なら全タグ |
-| `--dry-run` | なし | 何も pull せず、pull が必要なものだけ報告する |
-| `--on-new` | `register` | ローカルに何も無いイメージの扱い: `register`（pull）/ `ignore` |
-| `--pull-namespace` | `default` | pull 用 Pod を作る名前空間 |
-| `--pull-secret` | なし | 非公開レジストリ用の imagePullSecret 名（`--pull-namespace` 内） |
-| `--pull-timeout` | `2m` | ノードごとの pull の待ち時間 |
-| `--daemon` | なし | 常駐して `--interval` ごとに繰り返す。指定しなければ 1 回で終了 |
-| `--interval` | `5m` | `--daemon` 時の実行間隔 |
-| `--namespace` | 全て | 対象の名前空間 |
-| `--annotation` | `floatingtag-pinner/enabled` | 対象を示す annotation（値 `"true"`） |
-| `--kubeconfig` | in-cluster → `~/.kube/config` | |
+フラグの一覧は、コマンドごとに [docs/cli](./docs/cli/index.md)（[collect](./docs/cli/collect.md)、[pull](./docs/cli/pull.md)、[trigger](./docs/cli/trigger.md)）にある。
+**コードのフラグの定義から生成している**ので、手で書いた表と食い違わない（`go run ./cmd/pinner docs docs/cli` で再生成する。更新を忘れると、テストが落ちる）。
+`pinner <command> --help` でも、同じ内容が見える。
 
 対象は Deployment / StatefulSet / DaemonSet / Knative Service。`--floating-tags` 以外のタグと、`@sha256:` で固定済みのイメージは除く。
 
@@ -288,6 +277,15 @@ internal/local/      ローカルキャッシュ（ノードのイメージス�
     `main` への push と pull request で動く。手動（Actions の `e2e` → Run workflow）でも、変数に関係なく実行できる。
   - 手元でも実行できる（docker、kind、kubectl が必要）: `go build -o pinner ./cmd/pinner && test/e2e/run.sh "$PWD/pinner"`。
   - まだ一度も実行していない。最初の実行で、スクリプトや想定の誤りが見つかる可能性がある。
+
+## ドキュメントのサイト
+
+README と `docs/`（コマンドライン、設計、調査）を、MkDocs（Material）で静的サイトにして、GitHub Pages に公開できる
+（[.github/workflows/docs.yml](./.github/workflows/docs.yml)。図は Mermaid のまま描画される）。
+
+- **いまはスキップされる**。GitHub Pages は、public のリポジトリ（または有料のプラン）が必要で、Pages の有効化（Settings → Pages → Source: GitHub Actions）も要るため。
+  リポジトリの変数 `PUBLISH_DOCS` を `true` にすると、`main` への push（README、`docs/`、`cmd/` などの変更）で公開される。手動（Actions の `docs` → Run workflow）でも実行できる。
+- 手元で確かめる: `pip install mkdocs-material && scripts/prepare-docs-site.sh && mkdocs serve`（`docs/` には手を加えず、`.site-src/` に、README をホームにした入力を作る）。
 
 ## 既存ツールの対応状況
 

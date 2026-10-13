@@ -1,0 +1,55 @@
+name: docs
+
+# Builds the documentation site (MkDocs) from README.md and docs/, and publishes it to GitHub Pages.
+# The command-line pages (docs/cli) are generated from the flag definitions and committed; a test
+# (TestCLIDocsAreUpToDate) fails when they are out of date.
+#
+# SKIPPED BY DEFAULT: GitHub Pages needs a public repository (or a paid plan), and Pages must be enabled
+# (Settings > Pages > Source: GitHub Actions). The jobs run only when the repository variable
+# PUBLISH_DOCS is "true", or when started by hand (Actions > docs > Run workflow).
+on:
+  push:
+    branches: [main]
+    paths: [README.md, "docs/**", mkdocs.yml, "scripts/prepare-docs-site.sh", "cmd/**", ".github/workflows/docs.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: ${{ vars.PUBLISH_DOCS == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: The generated command-line pages are up to date
+        run: go test ./cmd/pinner -run 'TestCLIDocsAreUpToDate'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install mkdocs-material==9.5.50
+      - run: scripts/prepare-docs-site.sh
+      - run: mkdocs build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

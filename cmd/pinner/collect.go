@@ -13,15 +13,26 @@ import (
 	"github.com/sasano8/kube-floatingtag-pinner/internal/trigger"
 )
 
+// collectFlags are the flags of collect.
+type collectFlags struct {
+	*selection
+	output *string
+}
+
+func registerCollect(fs *flag.FlagSet) *collectFlags {
+	cf := &collectFlags{selection: registerSelection(fs), output: fs.String("output", "table", "output format: table|json")}
+	fs.StringVar(cf.output, "o", "table", "shorthand for --output")
+	return cf
+}
+
 // runCollect lists what the other commands start from: the annotated resources, the images they use,
 // which of them are tracked (and why not, if not), and the actions their annotations name.
 // It reads the cluster and prints; it changes nothing.
 func runCollect(args []string) {
 	fs := flag.NewFlagSet("pinner collect", flag.ExitOnError)
-	sel := registerSelection(fs)
-	output := fs.String("output", "table", "output format: table|json")
-	fs.StringVar(output, "o", "table", "shorthand for --output")
+	cf := registerCollect(fs)
 	fs.Parse(args)
+	sel, output := cf.selection, cf.output
 	if *output != "table" && *output != "json" {
 		fatal(fmt.Errorf("unknown --output %q (want table|json)", *output))
 	}

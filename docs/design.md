@@ -358,6 +358,20 @@ Knative は、Revision を作ると、そのときリモートに問い合わせ
 - クラスタの中で動かす構成（CronJob / Deployment、RBAC、operator 化）は、いまは考えない。手元から `kubeconfig` で動かす前提。
 - pull 用 Pod の同時実行数の制限や、ワークロードが動いているノードだけを対象にすること（[research.md](./research.md) の rate limit の節）。
 
+## コマンドラインのドキュメント（生成と公開）
+
+- **フラグの定義から生成する**（`pinner docs`）。コマンドの一覧（`cmd/pinner/cli.go` の `commands`）が、使い方の文字列と、`docs/cli/*.md` の
+  両方の唯一の元で、フラグ（名前、型、既定値、説明）は、解析に使っている定義（`flag.FlagSet`）から読む。
+  手で書いた表と、実際のコードが食い違わない。フラグの説明は、`--help` と同じ（英語）。コマンドごとの説明（日本語）だけ、`commands` に持つ。
+- 生成した `docs/cli/*.md` は、**コミットする**（差分が見える）。`TestCLIDocsAreUpToDate` が、生成の結果と一致するかを確かめ、
+  フラグを足して、再生成を忘れると、CI が落ちる。`docs` コマンドは、使い方の一覧には出さない。
+- cobra などの CLI ライブラリには載せ替えていない（依存が増え、いまの `flag` のコードを書き直すことになるため）。標準の `flag` のまま、
+  フラグの定義を読んで Markdown にする、数十行の自作で足りる。
+- **公開**（`.github/workflows/docs.yml`）: MkDocs（Material）で、README と `docs/` を静的サイトにして、GitHub Pages に出す。
+  README は `docs/` の外にあるので、`scripts/prepare-docs-site.sh` が、`.site-src/`（コミットしない）に、README をホームにした入力を作り、
+  サイトで解決できないリンクを、リポジトリの URL に直す。`docs/` 自体は書き換えない。
+  **スキップが既定**（変数 `PUBLISH_DOCS` か手動で実行）。Pages は public のリポジトリが要るため。
+
 ## テストの層
 
 | 層 | 内容 | このプロジェクト |

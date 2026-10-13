@@ -191,7 +191,10 @@ func (n *Node) pullOn(ctx context.Context, node, ref, digest string) (string, er
 		"containers": []interface{}{map[string]interface{}{
 			"name":            "pull",
 			"image":           ref,
-			"imagePullPolicy": "IfNotPresent",
+			// Always, not IfNotPresent: the node may already hold this tag at an older digest, and
+			// IfNotPresent would take that as "present" and pull nothing. Always asks the registry, and
+			// pulls (and moves the tag) when the digest differs.
+			"imagePullPolicy": "Always",
 			"command":         []interface{}{"/floatingtag-pinner-pull-only"},
 		}},
 	}

@@ -89,6 +89,9 @@ func TestPull(t *testing.T) {
 		if c["image"] != "ghcr.io/o/app:latest" {
 			t.Errorf("pull image = %v, want the tag reference", c["image"])
 		}
+		if c["imagePullPolicy"] != "Always" {
+			t.Errorf("imagePullPolicy = %v: a tag the node already holds at an older digest must be asked again", c["imagePullPolicy"])
+		}
 		u.Object["status"] = map[string]interface{}{"containerStatuses": []interface{}{
 			map[string]interface{}{"imageID": "ghcr.io/o/app@sha256:bbb"}}}
 		return false, nil, nil

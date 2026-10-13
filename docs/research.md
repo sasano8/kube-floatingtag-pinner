@@ -91,3 +91,35 @@
   pull 用 Pod の同時実行数の制限、ワークロードが動いているノードだけを対象にする。
 - 認証: リモートの digest 取得は、既定のキーチェーン（`~/.docker/config.json` など）を使う。
   kubelet の pull は、`--pull-secret`（imagePullSecret）を使う。
+
+## 4. Knative: テンプレートの annotation を変えると、新しい Revision ができるか
+
+結論: **できる**（ソースの読みと、Kubernetes の仕様からの推論。実機では未確認）。`rollout` の Knative 向けの動作は、これに頼っている。
+
+読んだ順に、根拠を並べる。
+
+1. **Service は、Configuration に、テンプレートごとそのまま渡す。**
+   Service の reconciler は、`Spec: service.Spec.ConfigurationSpec` と、Configuration の spec を丸ごと代入する
+   （[service/resources/configuration.go](https://github.com/knative/serving/blob/main/pkg/reconciler/service/resources/configuration.go)）。
+   `spec.template` は、その中に入っているので、テンプレートの metadata（annotation）も一緒に Configuration に入る。
+2. **Configuration の CRD は、status サブリソースを持つ。**
+   `subresources: status: {}`（[configuration.yaml](https://github.com/knative/serving/blob/main/config/core/300-resources/configuration.yaml)）。
+   status サブリソースを持つ CRD では、`metadata.generation` が、spec が変わるたびに増える（Kubernetes の仕様）。
+   `spec.template.metadata.annotations` は spec の中なので、これを変えると generation が増える。
+   （これは Knative のコードではなく、Kubernetes の仕様からの推論。）
+3. **Revision は、generation ごとに 1 つ作られる。**
+   Configuration の reconciler は、最新の generation の Revision が見つからなければ、新しく作る
+   （[configuration.go](https://github.com/knative/serving/blob/main/pkg/reconciler/configuration/configuration.go)。2 章の調査でも読んだ）。
+   Revision の名前は `<Configuration の名前>-<generation を 5 桁で>`、generation のラベルも付く。
+   Revision は、テンプレートの `ObjectMeta` と `Spec` を、そのまま写して作られる
+   （[configuration/resources/revision.go](https://github.com/knative/serving/blob/main/pkg/reconciler/configuration/resources/revision.go)）。
+   テンプレートの annotation も、Revision に引き継がれる。
+4. **新しい Revision は、作成時に、タグを digest へ解決し直す**（1 章の調査のとおり。リモートに問い合わせる）。
+
+つまり、`spec.template.metadata.annotations` に、毎回違う値の annotation を足せば、generation が増え、新しい Revision ができて、タグが解決し直される。
+
+- 確認できていない点: 「テンプレートの annotation の変更だけで、新しい Revision ができる」と書いた Knative の文書や、実際のクラスタでの結果は見つかっていない
+  （検索でも、直接の記述は見つからなかった）。上の 4 つの根拠をつなげた推論。
+  実機で確かめる（e2e には、Knative の確認を入れていない）。
+- 注意: `kubectl apply`（クライアント側の apply）で annotation を足すと、`last-applied-configuration` との衝突が起きうる
+  （[knative/client#964](https://github.com/knative/client/pull/964)）。このツールは `patch`（JSON merge patch）で足すので、影響しない見込み。

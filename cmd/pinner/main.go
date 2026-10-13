@@ -20,6 +20,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/sasano8/kube-floatingtag-pinner/internal/action"
 	"github.com/sasano8/kube-floatingtag-pinner/internal/collector"
 	"github.com/sasano8/kube-floatingtag-pinner/internal/local"
 	"github.com/sasano8/kube-floatingtag-pinner/internal/registry"
@@ -28,58 +29,65 @@ import (
 	"github.com/sasano8/kube-floatingtag-pinner/internal/trigger"
 )
 
-const usage = `usage: pinner <command> [flags]
-
-commands:
-  pull      stage 1: pull into the local cache (node image stores) what changed on the remote registry
-  trigger   stage 2: find resources running a different image than the local cache, and run their action
-`
-
-// common holds the flags shared by every command.
-type common struct {
+// selection holds the flags that say which resources and images are looked at. Every command
+// starts from the same collection (see `pinner collect`).
+type selection struct {
 	kubeconfig *string
 	namespace  *string
 	annotation *string
 	floating   *string
-	localKind  *string
-	daemon     *bool
-	interval   *time.Duration
-	dryRun     *bool
-	logLevel   *string
-	logStates  *string
 }
 
-func registerCommon(fs *flag.FlagSet, dryRunHelp string) *common {
-	return &common{
+func registerSelection(fs *flag.FlagSet) *selection {
+	return &selection{
 		kubeconfig: fs.String("kubeconfig", "", "path to kubeconfig (default: in-cluster, then ~/.kube/config)"),
 		namespace:  fs.String("namespace", "", "namespace to watch (default: all)"),
 		annotation: fs.String("annotation", source.DefaultAnnotation, "annotation that marks target resources"),
 		floating:   fs.String("floating-tags", "latest", "comma-separated tags to track; images with other tags are ignored (empty = all tags)"),
-		localKind:  fs.String("local", "node", "local cache: node (container runtime image store of the nodes)"),
-		daemon:     fs.Bool("daemon", false, "keep running: repeat every --interval until stopped (default: run once and exit)"),
-		interval:   fs.Duration("interval", 5*time.Minute, "with --daemon: time between passes"),
-		dryRun:     fs.Bool("dry-run", false, dryRunHelp),
-		logLevel:   fs.String("log-level", "info", "log level threshold: debug|info|warn|error (match, not-running = info; mismatch, not-pulled = warn; error = error)"),
-		logStates:  fs.String("log-states", "", "comma-separated states to log (default: all): match, mismatch, not-pulled, error; trigger also not-running"),
+	}
+}
+
+// kube is the collection: the annotated resources and their images.
+func (s *selection) kube(client dynamic.Interface) *source.Kube {
+	return &source.Kube{Client: client, Namespace: *s.namespace, Annotation: *s.annotation, FloatingTags: splitList(*s.floating)}
+}
+
+// common holds the flags shared by pull and trigger.
+type common struct {
+	*selection
+	localKind *string
+	daemon    *bool
+	interval  *time.Duration
+	dryRun    *bool
+	logLevel  *string
+	logStates *string
+}
+
+func registerCommon(fs *flag.FlagSet, dryRunHelp string) *common {
+	return &common{
+		selection: registerSelection(fs),
+		localKind: fs.String("local", "node", "local cache: node (container runtime image store of the nodes)"),
+		daemon:    fs.Bool("daemon", false, "keep running: repeat every --interval until stopped (default: run once and exit)"),
+		interval:  fs.Duration("interval", 5*time.Minute, "with --daemon: time between passes"),
+		dryRun:    fs.Bool("dry-run", false, dryRunHelp),
+		logLevel:  fs.String("log-level", "info", "log level threshold: debug|info|warn|error (match, not-running = info; mismatch, not-pulled = warn; error = error)"),
+		logStates: fs.String("log-states", "", "comma-separated states to log (default: all): match, mismatch, not-pulled, error; trigger also not-running"),
 	}
 }
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprint(os.Stderr, usage)
+		fmt.Fprint(os.Stderr, usage())
 		os.Exit(2)
 	}
-	var j job
-	switch os.Args[1] {
-	case "pull":
-		j = setupPull(os.Args[2:])
-	case "trigger":
-		j = setupTrigger(os.Args[2:])
-	default:
-		fmt.Fprint(os.Stderr, usage)
-		os.Exit(2)
+	for _, c := range commands {
+		if c.name == os.Args[1] {
+			c.run(os.Args[2:])
+			return
+		}
 	}
-	j.run()
+	fmt.Fprint(os.Stderr, usage())
+	os.Exit(2)
 }
 
 // job is one command's pass, and whether to repeat it.
@@ -109,14 +117,34 @@ func (j job) run() {
 	}
 }
 
-func setupPull(args []string) job {
+// pullFlags are the flags of pull.
+type pullFlags struct {
+	*common
+	onNew       *string
+	pullNS      *string
+	pullSecret  *string
+	pullTimeout *time.Duration
+}
+
+func registerPull(fs *flag.FlagSet) *pullFlags {
+	return &pullFlags{
+		common:      registerCommon(fs, "report what would be pulled, without pulling"),
+		onNew:       fs.String("on-new", string(collector.OnNewRegister), "for images the local cache does not hold: register (pull) | ignore"),
+		pullNS:      fs.String("pull-namespace", "default", "namespace for the short-lived Pods that make nodes pull images"),
+		pullSecret:  fs.String("pull-secret", "", "imagePullSecret name (in --pull-namespace) for private registries"),
+		pullTimeout: fs.Duration("pull-timeout", 2*time.Minute, "per-node timeout for a pull"),
+	}
+}
+
+func runPull(args []string) {
 	fs := flag.NewFlagSet("pinner pull", flag.ExitOnError)
-	c := registerCommon(fs, "report what would be pulled, without pulling")
-	onNew := fs.String("on-new", string(collector.OnNewRegister), "for images the local cache does not hold: register (pull) | ignore")
-	pullNS := fs.String("pull-namespace", "default", "namespace for the short-lived Pods that make nodes pull images")
-	pullSecret := fs.String("pull-secret", "", "imagePullSecret name (in --pull-namespace) for private registries")
-	pullTimeout := fs.Duration("pull-timeout", 2*time.Minute, "per-node timeout for a pull")
+	p := registerPull(fs)
 	fs.Parse(args)
+	setupPull(p).run()
+}
+
+func setupPull(p *pullFlags) job {
+	c, onNew, pullNS, pullSecret, pullTimeout := p.common, p.onNew, p.pullNS, p.pullSecret, p.pullTimeout
 	rep := setupLogging(c, "pull", report.Match, report.Mismatch, report.NotPulled, report.Error)
 
 	policy, err := collector.ParseOnNew(*onNew)
@@ -125,7 +153,7 @@ func setupPull(args []string) job {
 	}
 	client := newClient(*c.kubeconfig)
 	col := &collector.Collector{
-		Source:   &source.Kube{Client: client, Namespace: *c.namespace, Annotation: *c.annotation, FloatingTags: splitList(*c.floating)},
+		Source:   c.kube(client),
 		Registry: registry.Remote{},
 		Local:    newLocal(*c.localKind, &local.Node{Client: client, PullNamespace: *pullNS, PullSecret: *pullSecret, PullTimeout: *pullTimeout}),
 		OnNew:    policy,
@@ -134,20 +162,39 @@ func setupPull(args []string) job {
 	return job{pass: func(ctx context.Context) bool { return pullPass(ctx, col, rep) }, daemon: *c.daemon, interval: *c.interval}
 }
 
-func setupTrigger(args []string) job {
+// triggerFlags are the flags of trigger.
+type triggerFlags struct {
+	*common
+	maxActions *int
+}
+
+func registerTrigger(fs *flag.FlagSet) *triggerFlags {
+	return &triggerFlags{
+		common:     registerCommon(fs, "run no action: log which action would have run"),
+		maxActions: fs.Int("max-actions", 0, "most actions to request per pass (0 = no cap)"),
+	}
+}
+
+func runTrigger(args []string) {
 	fs := flag.NewFlagSet("pinner trigger", flag.ExitOnError)
-	c := registerCommon(fs, "run no action: log which action would have run")
+	t := registerTrigger(fs)
 	fs.Parse(args)
+	setupTrigger(t).run()
+}
+
+func setupTrigger(t *triggerFlags) job {
+	c, maxActions := t.common, t.maxActions
 	rep := setupLogging(c, "trigger", report.Match, report.Mismatch, report.NotPulled, report.NotRunning, report.Error)
 
 	client := newClient(*c.kubeconfig)
 	det := &trigger.Detector{
-		Source:  &source.Kube{Client: client, Namespace: *c.namespace, Annotation: *c.annotation, FloatingTags: splitList(*c.floating)},
+		Source:  c.kube(client),
 		Local:   newLocal(*c.localKind, &local.Node{Client: client}),
 		Running: &source.KubeRunning{Client: client},
 	}
-	actor := trigger.NewActor(trigger.None{})
+	actor := trigger.NewActor(trigger.None{}, action.Rollout{Client: client}, action.DeletePods{Client: client})
 	actor.DryRun = *c.dryRun
+	actor.MaxActions = *maxActions
 	return job{pass: func(ctx context.Context) bool { return triggerPass(ctx, det, actor, rep) }, daemon: *c.daemon, interval: *c.interval}
 }
 
@@ -245,6 +292,7 @@ func triggerPass(ctx context.Context, d *trigger.Detector, actor *trigger.Actor,
 		slog.Error(rep.Msg("detect failed"), "err", err)
 		return false
 	}
+	actor.BeginPass()
 	ok := true
 	for _, f := range findings {
 		attrs := []any{"resource", f.Resource.String(), "image", f.Image}

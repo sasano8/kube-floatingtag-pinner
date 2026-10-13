@@ -30,7 +30,7 @@ README の概要では触れていない、詳細寄りの設計と、**なぜ�
 
 - **pull するのは kubelet**で、このツールはイメージ本体を落とさない（リモートへは digest の問い合わせだけ）。
   「ローカルを最新にする」と「リソースに取り直させる」は、別の操作で、失敗のしかたも違う。分けておくと、片方だけ動かせる。
-- 第一段階はワークロードに一切触れない。**読み取りと pull だけ**なので、Argo CD などとも衝突しない。
+- 第一段階はワークロードに一切触れない。**読み取りと pull だけ**。
   危険度の高い第二段階（アクションの実行）は、後から足せる独立した層にしておく。
 - 第二段階がリモートを見ないのは、第一段階でローカルが最新になっているという前提に立つため。
   この前提のおかげで、第二段階の比較は「ローカルの中の値」と「動いているものの値」だけで閉じる。
@@ -178,7 +178,24 @@ cmd/pinner  ──▶  internal/collector（収集と比較のロジック）
   1 回実行では、どれか 1 つでも失敗があれば終了コードは非 0。
 - リモートの digest は `remote.Head` で取る（イメージ本体は落とさない）。
 
-## 8. 第二段階の設計 [検知と `none` は実装済み。ほかのアクションは未実装]
+## 収集（`collect`）: pull と trigger の土台
+
+`pull` も `trigger` も、まず「どのリソースの、どのイメージを対象にするか」を決める。その部分を、コマンド `pinner collect` として、
+単独で見られるようにした（読み取りのみ。`internal/source` の `Kube.Resources`）。
+
+```
+collect ──▶ pull    （対象のイメージを、リモートとローカルで比べて、pull する）
+        └─▶ trigger （対象のリソースを、ローカルと実行中で比べて、アクションを依頼する）
+```
+
+- 対象の選び方（`--annotation`、`--floating-tags`、`--namespace`）は、3 つのコマンドで共通。`collect` で見えたものが、`pull` と `trigger` の対象になる。
+  フラグも、コード（`selection`）も共通。「なぜ、このイメージが対象にならないのか」は、`collect` で理由まで見られる。
+- 対象外のイメージは、理由と一緒に持つ（`Resource.Skipped`）: digest 指定（`pinned by digest`）、フローティングタグでない（`tag is not floating`）。
+  対象のイメージが 1 つもなくても、annotation が付いていれば、リソースは一覧に出る（`pull` と `trigger` は、対象のイメージだけを見る）。
+- 出力は、ログではなくデータなので、標準出力に出す（表、または `-o json`）。ログ（`--log-level`、`--log-states`）の対象ではない。
+- 実装の順序は逆になったが、本来は、最初に作るべき部分だった。
+
+## 8. 第二段階の設計 [検知、`none`、`rollout`、`delete-pods` は実装済み。`sync` は未実装]
 
 ### 比較
 
@@ -194,9 +211,10 @@ Pod から取るのは「タグ」と「digest」の両方。タグはどのロ�
 - 検知（`internal/trigger` の `Detector`）: 実装済み。リソースの収集（`source.Kube.Resources`）、
   ノードごとのローカルのタグの digest（`local.Node.NodeTagDigests`）、実行中の digest（`source.KubeRunning`）を比べる。
   Pod はそのノードのタグと、Revision はローカル全体のタグと比べる。結果は `match` / `mismatch` / `not-pulled` / `not-running` / `error`。
-- アクター（`Actor`）とアクション: `none`（既定）だけ実装済み。アクション名が未実装のときは、エラーにする。
+- アクター（`Actor`）とアクション: `none`（既定）、`rollout`、`delete-pods` が実装済み（`internal/action`）。アクション名が未実装のときは、エラーにする。
+  同じ状態への繰り返しの回避と、`--max-actions` も `Actor` にある（下の「アクター」の節）。
 - `trigger --dry-run`: 実装済み。アクションを実行せず、どのアクションが実行されるはずだったかをログに出す。
-- 未実装: `delete-pods`、`restart`、`new-revision`、`sync`（pull → trigger）。
+- 未実装: `sync`（pull → trigger）。
 - 実機では未確認。
 
 ### ログ（状態とログレベル）
@@ -245,7 +263,7 @@ Pod から取るのは「タグ」と「digest」の両方。タグはどのロ�
   - `match` と `not-running` には結び付けない（何もしない）。
   - どれも未指定なら `none`（何もしない）。**`on-not-pulled` は `on-mismatch` を引き継がない。** `not-pulled` は比べる相手が無く、
     何を直すのか分からないため。たとえば Knative は、Revision の Pod が digest で pull するのでノードにタグが付かず、
-    `not-pulled` のままになりうる。`new-revision` を引き継ぐと、`--daemon` の周期ごとに新しい Revision を作り続ける。
+    `not-pulled` のままになりうる。`rollout` を引き継ぐと、`--daemon` の周期ごとに新しい Revision を作り続ける。
     対処は、アクションではなく、第一段階の `pull`（pinner 駆動の pull）。
   - 「誰が pull するか」（第一段階: `pull` を使う＝pinner 駆動、使わず Pod の起動に任せる＝Pod 駆動）と、
     「違いを見つけたとき何をするか」（第二段階: このアクション）は、別の軸。
@@ -263,17 +281,64 @@ Pod から取るのは「タグ」と「digest」の両方。タグはどのロ�
   アクションを足しても、検知は変わらない。
   ログ以外（Event の作成、通知など）も、後から足せる。
 
-組み込みの予定（いずれも、spec の image は書き換えない。**最小の操作で、pull が起こるきっかけを作る**）:
+組み込み（いずれも、spec の image は書き換えない。**最小の操作で、pull が起こるきっかけを作る**）:
 
-| アクション | 対象 | 操作 | spec への影響 |
-| --- | --- | --- | --- |
-| `none`（既定） | すべて | 何もしない（見つけたことは、ログに出る） | 無し |
-| `delete-pods` | Deployment / StatefulSet / DaemonSet | ローカルと違う Pod を削除する（ReplicaSet 等が作り直す） | 無し |
-| `restart` | Deployment / StatefulSet / DaemonSet | Pod テンプレートに `restartedAt` の annotation を付けて、段階的に入れ替える | annotation を 1 つ足す |
-| `new-revision` | Knative Service | ksvc の `spec.template` に annotation を足し、新しい Revision を作る | annotation を 1 つ足す |
+| アクション | 状態 | 対象 | 操作 | spec への影響 |
+| --- | --- | --- | --- | --- |
+| `none`（既定） | 実装済み | すべて | 何もしない（見つけたことは、ログに出る） | 無し |
+| `rollout` | 実装済み・実機は未確認 | Deployment / StatefulSet / DaemonSet / Knative Service | Pod テンプレートに annotation を足して、新しい世代を出す | annotation を 1 つ足す |
+| `delete-pods` | 実装済み・実機は未確認 | Deployment / StatefulSet / DaemonSet | `mismatch` だった Pod だけを削除する（ReplicaSet 等が作り直す） | 無し |
 
-Knative で Pod を消しても意味がないのは、Revision の Pod が解決済みの digest で固定されているため（同じ旧いイメージで作り直される）。
-新しい Revision を作ると、そのときタグが解決し直される。このとき解決するのは、ローカルではなくリモートへの問い合わせ。
+**アクションは「意図」で名付け、種類ごとの違いは、対象の処理に持たせる。**
+Deployment 等の「ローリング更新」と、Knative の「新しい Revision」は、どちらもテンプレートの annotation を 1 つ変える同じ操作
+（`spec.template.metadata.annotations` を JSON merge patch する）で、対象の種類（API の種類）が違うだけ。
+そこで、`restart` と `new-revision` を別のアクションにせず、`rollout`（新しい世代を出す）にまとめた。
+`delete-pods` は、Knative には対応しない（`Supports(kind)` が、対応しない組み合わせをエラーにする）。
+
+- Knative で、テンプレートの annotation の変更が新しい Revision を作ることは、ソースの読みでは確かめた（[research.md](./research.md) の 4 章）。実機は未確認。
+- annotation の key は `floatingtag-pinner/restartedAt`（値は UTC の時刻、秒単位）。`kubectl rollout restart` の
+  `kubectl.kubernetes.io/restartedAt` とは別にして、kubectl との衝突を避ける。
+  同じ resource の 2 つの finding（たとえば 2 つの image）が同じ秒に patch しても、同じ値なので、2 回目は何も変えず、rollout は 1 回で済む。
+- field manager は `floatingtag-pinner`。誰が変えたかが、`managedFields` で分かる。
+- 実装は `internal/action`。`kind → API resource` の対応は、`source` と共通（`source.ResourceFor`）。
+
+**`delete-pods` の設計**
+
+- 削除するのは、`mismatch` の finding が名指しした Pod だけ（`Finding.Mismatches[].Pod`）。揃っている Pod には触れない。リソース（Deployment 等）には触れない。
+- **UID を条件に削除する**: 検知してから削除するまでの間に、その Pod がすでに入れ替わっていたら（StatefulSet は名前が同じ）、新しい Pod を消さない。
+  条件に合わない（Conflict）、または、すでに無い（NotFound）は、目的が済んでいるので、エラーにしない。そのため、`trigger.Running` が Pod の UID を持つ。
+- Knative には対応しない。Revision の Pod は、解決済みの digest で固定されていて、消しても同じものが作り直されるだけ。
+- **`mismatch` にだけ結び付けられる**（`StateAware`）。`not-pulled` や `error` では、削除する Pod を名指しできないため、`on-not-pulled=delete-pods` はエラーにする。
+- **まとめて削除する**: 違う Pod を一度に消すので、一時的に Pod が足りなくなることがある。Eviction API（PodDisruptionBudget を尊重する）や、
+  1 つずつ消す方式は採らなかった。開発環境向けで、単純さを取った。同じ状態は 1 回しか依頼しないので（下の「アクター」）、
+  「1 回の実行で 1 つずつ」にすると、残りの Pod が入れ替わらなくなる。段階的に入れ替えたいときは、`rollout`（ローリング更新）を使う。
+
+### アクター（繰り返しの回避と上限）と、ステートストア
+
+`Actor` は、アクションを実行する前に、次の 2 つを見る。
+
+- **同じ状態には 1 回だけ依頼する**（`once-per-state`）: key は（リソース、イメージ、状態、アクション）、記録するのは、そのときのローカルの digest。
+  `rollout` したあとも、リソースがしばらく（または、ずっと）ローカルと違うことがある。毎回依頼すると、`--daemon` で、周期ごとに rollout し続ける。
+  ローカルの digest が変われば、別の状態なので、また依頼する。`--dry-run` は、数えない。
+- **`--max-actions`**: 1 回の実行（pass）で依頼する数の上限（0 = 上限なし）。次の pass では、また 0 から数える。
+
+**ステートストア**（`internal/state`）: 上の「何を依頼したか」を、`Store` の interface の裏に置く。いまは、メモリ上の辞書（`Memory`）だけ。
+プロセスが終わると、忘れる（`trigger` を 1 回実行で繰り返すときも、毎回忘れる）。
+
+- 持っているもの（`Record`）: 依頼したときのローカルの digest、依頼した時刻、依頼の失敗の連続回数（`Failures`）、
+  依頼したのに同じ状態のままだった回数（`StillDifferent`。アクションが効かなかった印）、最後のエラー。
+  ベースライン（比較の基準）ではなく、アクションの履歴。消えても、余分にもう 1 回、依頼するだけで、壊れない。
+- **まだ実装していない戦略**（`internal/state` のコメントに書いてある）: `cooldown`（同じリソースへの間隔を空ける）、
+  `backoff`（失敗や効かなかったことが続くほど、間隔を伸ばす。更新が、うまくいかないところで消極的になる）、
+  `circuit-breaker`（1 回の実行で失敗が閾値を超えたら、止める）。どれも、同じ `Record` を読み書きして、`Actor` の「実行してよいか」で判断する。
+- 「効かなかった」の判定: `trigger` は、依頼したあとの結果を追わない（投げっぱなし）が、次の実行で同じリソースをもう一度見る。
+  依頼したのに、同じローカルの digest のまま、まだ違えば、効かなかった。いまは、その回数を数えるだけ（`StillDifferent`）。
+- 永続化する `Store` の候補: ファイル（JSON。`trigger` を手元や cron から繰り返し起動するときに効く。この規模なら、依存は要らない）、
+  ConfigMap（クラスタの中で動かすとき）。リソースの annotation には書かない（ユーザーのリソースに書くことになるため）。
+  組み込みのキーバリュー DB（bbolt など）は、複数のプロセスが同時に書く、データが大きい、といったときだけ、価値がある。
+
+Knative は、Revision を作ると、そのときリモートに問い合わせてタグを解決する（ローカルではない）。
+そのため、`rollout` で作られた Revision の digest は、ローカルのタグと、通常は一致する（`pull` のあと）。
 
 ### 採らなかった案: spec の image に digest を書く（`repo:latest@sha256:…`）
 
@@ -287,16 +352,38 @@ Knative で Pod を消しても意味がないのは、Revision の Pod が解�
 
 （digest とタグを併記した `repo:latest@sha256:…` では、kubelet は digest を使いタグは無視する、と理解している [未確認]。）
 
-### Argo CD との関係 [未確認]
-
-image を書き換えないので衝突は大きく減る。確認が要るのは、テンプレートへの annotation（`restartedAt`、ksvc の template annotation）を、
-selfHeal が差分として戻さないか。戻すなら `ignoreDifferences` を使う。Pod の削除は spec を変えないので影響しない見込み。
-
 ## 9. 検討中のこと
 
 - 結果の出力先の追加（Event、メトリクス。現状はログのみ）。
 - クラスタの中で動かす構成（CronJob / Deployment、RBAC、operator 化）は、いまは考えない。手元から `kubeconfig` で動かす前提。
 - pull 用 Pod の同時実行数の制限や、ワークロードが動いているノードだけを対象にすること（[research.md](./research.md) の rate limit の節）。
+
+## コマンドラインのドキュメント（生成と公開）
+
+- **フラグの定義から生成する**（`pinner docs`）。コマンドの一覧（`cmd/pinner/cli.go` の `commands`）が、使い方の文字列と、`docs/cli/*.md` の
+  両方の唯一の元で、フラグ（名前、型、既定値、説明）は、解析に使っている定義（`flag.FlagSet`）から読む。
+  手で書いた表と、実際のコードが食い違わない。フラグの説明は、`--help` と同じ（英語）。コマンドごとの説明（日本語）だけ、`commands` に持つ。
+- 生成した `docs/cli/*.md` は、**コミットする**（差分が見える）。`TestCLIDocsAreUpToDate` が、生成の結果と一致するかを確かめ、
+  フラグを足して、再生成を忘れると、CI が落ちる。`docs` コマンドは、使い方の一覧には出さない。
+- cobra などの CLI ライブラリには載せ替えていない（依存が増え、いまの `flag` のコードを書き直すことになるため）。標準の `flag` のまま、
+  フラグの定義を読んで Markdown にする、数十行の自作で足りる。
+- **公開**（`.github/workflows/docs.yml`）: MkDocs（Material）で、README と `docs/` を静的サイトにして、GitHub Pages に出す。
+  README は `docs/` の外にあるので、`scripts/prepare-docs-site.sh` が、`.site-src/`（コミットしない）に、README をホームにした入力を作り、
+  サイトで解決できないリンクを、リポジトリの URL に直す。`docs/` 自体は書き換えない。
+  **スキップが既定**（変数 `PUBLISH_DOCS` か手動で実行）。Pages は public のリポジトリが要るため。
+
+## テストの層
+
+| 層 | 内容 | このプロジェクト |
+| --- | --- | --- |
+| 単体 | Kubernetes のクライアントを fake に差し替える | 実装済み。CI で実行 |
+| envtest | 本物の `kube-apiserver` と `etcd` だけを起動する（kubelet もノードも無い） | 使わない。pull 用 Pod、`Node.status.images` は kubelet が無いと確かめられないため |
+| e2e | kind（本物の kubelet と containerd）と、CI の中のローカルレジストリ | `test/e2e/run.sh` と `.github/workflows/e2e.yml`。**スキップが既定**（変数 `RUN_E2E` か手動で実行）。未実行 |
+
+- e2e はローカルレジストリを使う: 同じタグに別の内容を 2 回 push すれば「リモートのタグが動いた」状況を作れる。rate limit、認証の影響も受けない。
+  kind のノードの containerd に、`localhost:5001` をローカルレジストリへ向ける設定を入れる（kind の公式の手順）。
+- ノードの `status.images` の更新の遅れ（pull 後の読み直しを繰り返す理由）は、kind でも再現される。e2e が、その確認になる。
+- Knative（Revision の `imageDigest`）は、Knative Serving のインストールが重いので、e2e の対象外。単体テストのみ。
 
 ## 10. 実機で確認が必要な前提 [未確認]
 

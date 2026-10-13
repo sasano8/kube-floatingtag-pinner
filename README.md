@@ -99,9 +99,14 @@ digest を別に記録することはしない（正本はリモートのレジ�
 
 | コマンド | 内容 | 状態 |
 | --- | --- | --- |
+| `pinner collect` | annotation の付いたリソースと、使っているイメージを集めて表示する。**`pull` と `trigger` の土台**（読み取りのみ） | 実装済み |
 | `pinner pull` | 第一段階: リモートで変わったイメージを、ローカルキャッシュに pull する | 実装済み |
 | `pinner trigger` | 第二段階: ローカルを正に、実行中のものがローカルと違えば、指定のアクションを引き起こす（結果はアクション次第で、保証しない） | 検知と `none` のみ実装済み |
 | `pinner sync` | `pull` → `trigger` を続けて行う | 未実装 |
+
+`pull` と `trigger` は、どちらも、`collect` と同じ収集から始まる（annotation の付いたリソースと、そのイメージ）。
+そのため、`--kubeconfig`、`--namespace`、`--annotation`、`--floating-tags` は、3 つのコマンドで共通で、`collect` で見えたものが、`pull` と `trigger` の対象になる。
+「なぜ、このイメージが対象にならないのか」は、まず `collect` で確かめる。
 
 どのコマンドも、既定は 1 回実行して終了。`--daemon`（と `--interval`）で常駐して繰り返す。
 第二段階はアクション（将来は Pod の削除など）の実行を伴うので、`pull` だけでは動かない。第二段階まで行うときは、`trigger` か `sync` を明示する。
@@ -109,7 +114,21 @@ digest を別に記録することはしない（正本はリモートのレジ�
 
 - **ログ**: 見つけたことは、アクションと関係なく、常にすべて報告する。出す範囲は実行時のオプションで絞る（下の「ログ」）。
 - **アクション**: リソースに何かをするもの。リソースの annotation で、状態ごとに指定する。**既定は `none`（何もしない）**。
-  現状のアクションは `none` だけで、`delete-pods` などは未実装（指定するとエラーになる）。つまり、いまの `trigger` はリソースに何も変更しない。
+  現状のアクションは `none`（既定）、`rollout`、`delete-pods`。
+
+| アクション | 対象 | 操作 |
+| --- | --- | --- |
+| `none`（既定） | すべて | 何もしない（見つけたことは、ログに出る） |
+| `rollout` | Deployment / StatefulSet / DaemonSet / Knative Service | Pod テンプレート（`spec.template.metadata.annotations`）に `floatingtag-pinner/restartedAt: <時刻>` を足して、新しい世代を出す。Deployment 等ではローリング更新、Knative では新しい Revision（作成時にタグが解決し直される）。**image は変更しない** |
+| `delete-pods` | Deployment / StatefulSet / DaemonSet | `mismatch` だった Pod だけを削除する（ReplicaSet 等が作り直し、ローカルのイメージで起動する）。リソース自体には触れない。Knative は対象外（Pod を消しても、Revision が固定した同じ digest で作り直されるだけ）。`on-mismatch` にだけ指定できる |
+
+`rollout` の変更は、field manager `floatingtag-pinner` として記録される（誰が変えたかが、`managedFields` で分かる）。
+必要な権限: `rollout` は対象リソース（`deployments`、`statefulsets`、`daemonsets`、Knative の `services`）の `patch`、`delete-pods` は `pods` の `delete`。
+
+`delete-pods` は、違う Pod を**まとめて**削除する（UID を条件にするので、すでに入れ替わった Pod は消さない）。一時的に Pod が足りなくなることがある。
+段階的に入れ替えたいときは `rollout`（ローリング更新の strategy に従う）を使う。
+
+例: `kubectl annotate deployment/myapp floatingtag-pinner/on-mismatch=rollout`
 
 | annotation | 意味 | 既定 |
 | --- | --- | --- |
@@ -122,6 +141,32 @@ digest を別に記録することはしない（正本はリモートのレジ�
 - `on-not-pulled` は `on-mismatch` を引き継がない。比べる相手が無いので、何かを実行し続ける恐れがあるため
   （たとえば Knative は、Revision の Pod が digest で pull するので、ノードにタグが付かず、`not-pulled` のままになりうる）。
 - `trigger --dry-run` は、アクションを実行せず、どのアクションが実行されるはずだったかをログに出す。
+- 同じ（リソース、イメージ、ローカルの digest）に対して、同じアクションは **1 回しか依頼しない**（`--daemon` で `rollout` を周期ごとに繰り返さないため）。
+  依頼の履歴は、ステートストア（いまはメモリ上の辞書）に持つ。プロセスが終わると忘れるので、`trigger` を 1 回実行で繰り返すときは、毎回忘れる。
+  失敗や、効かなかったときに消極的にする戦略（`backoff` など）と、永続化は、これから（[docs/design.md](./docs/design.md)）。
+  ローカルの digest が変われば、新しい状態として、また依頼する。`--dry-run` の実行は、数えない。
+- `trigger --max-actions N` は、1 回の実行で依頼するアクションの数を N 件までにする（既定 0 = 上限なし）。間違えたときの影響を小さくする。
+
+### collect（収集して表示する）
+
+```sh
+./pinner collect                       # 表
+./pinner collect -o json               # JSON（スクリプト向け）
+./pinner collect --namespace tutorial --floating-tags=latest,dev
+```
+
+```
+RESOURCE                                   IMAGE                                    TRACKED                                       ON-MISMATCH  ON-NOT-PULLED  ON-ERROR
+tutorial/Deployment/web                    ghcr.io/sasano8/app-authorization-demo:latest  yes                                     rollout      -              -
+tutorial/Deployment/web                    ghcr.io/o/fixed:v1.2.3                   no: tag is not floating (see --floating-tags)  rollout      -              -
+tutorial/Deployment/web                    ghcr.io/o/side@sha256:abc…               no: pinned by digest                           rollout      -              -
+app-authorization-demo/Service/app-authorization-demo  ghcr.io/sasano8/app-authorization-demo:latest  yes                       -            -              -
+```
+
+- 1 行が、（リソース、イメージ）。`TRACKED` が `yes` のものが、`pull` と `trigger` の対象。`no: …` は、対象にならない理由。
+- `ON-MISMATCH` などは、リソースの annotation に書かれたアクション（`-` は未指定 = 既定の `none`）。
+- annotation `floatingtag-pinner/enabled: "true"` が付いたリソースだけが出る。付いていても、追うイメージが無ければ、すべて `no: …` で出る。
+- 何も変更しない。リモートのレジストリにも、ノードにも触れない（クラスタの読み取りだけ）。権限は、対象リソースの `list`。
 
 ### ログ
 
@@ -194,20 +239,9 @@ level=INFO msg="trigger not-running" resource=tutorial/DaemonSet/agent image=ghc
 - Pod は、その Pod が動くノードのタグと比べる。複数の Pod のうち 1 つでも違えば `mismatch`（違う Pod ごとに `running=` に出る）。
 - Knative の Revision は、ローカル全体のタグと比べる。
 
-| フラグ | 既定値 | 説明 |
-| --- | --- | --- |
-| `--local` | `node` | ローカルキャッシュの種類。現状は `node`（ノードのイメージストア）のみ |
-| `--floating-tags` | `latest` | 追う（フローティング）タグ。カンマ区切り。これ以外のタグは固定とみなして無視。空なら全タグ |
-| `--dry-run` | なし | 何も pull せず、pull が必要なものだけ報告する |
-| `--on-new` | `register` | ローカルに何も無いイメージの扱い: `register`（pull）/ `ignore` |
-| `--pull-namespace` | `default` | pull 用 Pod を作る名前空間 |
-| `--pull-secret` | なし | 非公開レジストリ用の imagePullSecret 名（`--pull-namespace` 内） |
-| `--pull-timeout` | `2m` | ノードごとの pull の待ち時間 |
-| `--daemon` | なし | 常駐して `--interval` ごとに繰り返す。指定しなければ 1 回で終了 |
-| `--interval` | `5m` | `--daemon` 時の実行間隔 |
-| `--namespace` | 全て | 対象の名前空間 |
-| `--annotation` | `floatingtag-pinner/enabled` | 対象を示す annotation（値 `"true"`） |
-| `--kubeconfig` | in-cluster → `~/.kube/config` | |
+フラグの一覧は、コマンドごとに [docs/cli](./docs/cli/index.md)（[collect](./docs/cli/collect.md)、[pull](./docs/cli/pull.md)、[trigger](./docs/cli/trigger.md)）にある。
+**コードのフラグの定義から生成している**ので、手で書いた表と食い違わない（`go run ./cmd/pinner docs docs/cli` で再生成する。更新を忘れると、テストが落ちる）。
+`pinner <command> --help` でも、同じ内容が見える。
 
 対象は Deployment / StatefulSet / DaemonSet / Knative Service。`--floating-tags` 以外のタグと、`@sha256:` で固定済みのイメージは除く。
 
@@ -226,12 +260,32 @@ level=INFO msg="trigger not-running" resource=tutorial/DaemonSet/agent image=ghc
 ```
 cmd/pinner/          エントリポイント（段階ごとのコマンド。既定は1回実行、--daemon で常駐）
 internal/collector/  収集と比較のロジック（実行形態に依存しない。Source / Registry / Local の interface）
-internal/source/     Kubernetes リソースからイメージを集める
+internal/source/     収集: annotation の付いたリソースと、そのイメージを集める（`pinner collect`）。`pull` と `trigger` の土台
 internal/registry/   リモートレジストリの digest 取得（go-containerregistry）
 internal/local/      ローカルキャッシュ（ノードのイメージストアを読む実装）
 ```
 
 設計の詳細（なぜそうしているか、採らなかった案、実機で未確認の前提）は [docs/design.md](./docs/design.md)。
+
+## テスト
+
+- **単体テスト**: `go test ./...`。Kubernetes のクライアントを偽物（fake）に差し替えているので、クラスタは要らない。CI（`main` への push）で実行される。
+- **e2e テスト**（[test/e2e/run.sh](./test/e2e/run.sh)）: kind（本物の kubelet と containerd）と、CI の中のローカルレジストリで、
+  `pull`（`--dry-run`、状態の変化、ログのオプション）と `trigger` を、本物のクラスタで確かめる。
+  レジストリを自前で建てるので、タグを自由に動かせる（Docker Hub の rate limit にも依存しない）。
+  - **いまはスキップされる**（[.github/workflows/e2e.yml](./.github/workflows/e2e.yml)）。リポジトリの変数 `RUN_E2E` を `true` にすると、
+    `main` への push と pull request で動く。手動（Actions の `e2e` → Run workflow）でも、変数に関係なく実行できる。
+  - 手元でも実行できる（docker、kind、kubectl が必要）: `go build -o pinner ./cmd/pinner && test/e2e/run.sh "$PWD/pinner"`。
+  - まだ一度も実行していない。最初の実行で、スクリプトや想定の誤りが見つかる可能性がある。
+
+## ドキュメントのサイト
+
+README と `docs/`（コマンドライン、設計、調査）を、MkDocs（Material）で静的サイトにして、GitHub Pages に公開できる
+（[.github/workflows/docs.yml](./.github/workflows/docs.yml)。図は Mermaid のまま描画される）。
+
+- **いまはスキップされる**。GitHub Pages は、public のリポジトリ（または有料のプラン）が必要で、Pages の有効化（Settings → Pages → Source: GitHub Actions）も要るため。
+  リポジトリの変数 `PUBLISH_DOCS` を `true` にすると、`main` への push（README、`docs/`、`cmd/` などの変更）で公開される。手動（Actions の `docs` → Run workflow）でも実行できる。
+- 手元で確かめる: `pip install mkdocs-material && scripts/prepare-docs-site.sh && mkdocs serve`（`docs/` には手を加えず、`.site-src/` に、README をホームにした入力を作る）。
 
 ## 既存ツールの対応状況
 
@@ -241,6 +295,5 @@ Keel・Knative 本体・Argo CD Image Updater では、ksvc の `latest` 追従�
 ## 未決事項
 
 - コマンド名（`pull` / `trigger`）は決定。両方を続けて行う `sync` は仮。
-- 第二段階のアクション（`delete-pods`、`restart`、`new-revision`）と `--dry-run` 以外の指定、`sync`。
+- `sync`（`pull` → `trigger`）。
 - 任意のレジストリを同期先にする `--local`（`registry`）。
-- Argo CD の `selfHeal` との折り合い（第二段階の実運用前に確認。[docs/design.md](./docs/design.md) 参照）。

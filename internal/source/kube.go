@@ -22,16 +22,17 @@ import (
 const DefaultAnnotation = "floatingtag-pinner/enabled"
 
 type kind struct {
-	gvr schema.GroupVersionResource
+	kind string
+	gvr  schema.GroupVersionResource
 	// path to the containers' parent (the pod spec)
 	podSpec []string
 }
 
 var kinds = []kind{
-	{schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}, []string{"spec", "template", "spec"}},
-	{schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "statefulsets"}, []string{"spec", "template", "spec"}},
-	{schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "daemonsets"}, []string{"spec", "template", "spec"}},
-	{schema.GroupVersionResource{Group: "serving.knative.dev", Version: "v1", Resource: "services"}, []string{"spec", "template", "spec"}},
+	{"Deployment", schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}, []string{"spec", "template", "spec"}},
+	{"StatefulSet", schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "statefulsets"}, []string{"spec", "template", "spec"}},
+	{"DaemonSet", schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "daemonsets"}, []string{"spec", "template", "spec"}},
+	{"Service", schema.GroupVersionResource{Group: "serving.knative.dev", Version: "v1", Resource: "services"}, []string{"spec", "template", "spec"}},
 }
 
 // Kube lists Deployments, StatefulSets, DaemonSets and Knative Services
@@ -45,6 +46,17 @@ type Kube struct {
 	// are treated as fixed and ignored. nil = track every tag. An image without a
 	// tag counts as "latest".
 	FloatingTags []string
+}
+
+// ResourceFor returns the API resource of a Kind this package reads, so that actions can
+// address the same resources. "Service" is the Knative Service here (the core Service is not read).
+func ResourceFor(kind string) (schema.GroupVersionResource, bool) {
+	for _, kd := range kinds {
+		if kd.kind == kind {
+			return kd.gvr, true
+		}
+	}
+	return schema.GroupVersionResource{}, false
 }
 
 // ActionAnnotationPrefix + <state> names the action for a state, e.g.
@@ -84,14 +96,21 @@ func (k *Kube) Resources(ctx context.Context) ([]trigger.Resource, error) {
 				}
 			}
 			res.Revision, _, _ = unstructured.NestedString(obj.Object, "status", "latestReadyRevisionName")
+			seen := map[string]bool{}
 			for _, img := range images(obj, kd.podSpec) {
-				if k.floating(img) {
-					res.Images = append(res.Images, img)
+				if seen[img] {
+					continue
 				}
+				seen[img] = true
+				if reason := k.skipReason(img); reason != "" {
+					res.Skipped = append(res.Skipped, trigger.Skipped{Image: img, Reason: reason})
+					continue
+				}
+				res.Images = append(res.Images, img)
 			}
-			if len(res.Images) > 0 {
-				out = append(out, res)
-			}
+			// An annotated resource is listed even when nothing in it is tracked: that is worth
+			// seeing (`pinner collect`). pull and trigger only look at Images.
+			out = append(out, res)
 		}
 	}
 	return out, nil
@@ -130,6 +149,17 @@ func selector(obj *unstructured.Unstructured) string {
 	return strings.Join(parts, ",")
 }
 
+// skipReason says why an image is not tracked ("" = it is).
+func (k *Kube) skipReason(image string) string {
+	if strings.Contains(image, "@") {
+		return "pinned by digest"
+	}
+	if !k.floating(image) {
+		return "tag is not floating (see --floating-tags)"
+	}
+	return ""
+}
+
 func (k *Kube) floating(image string) bool {
 	if k.FloatingTags == nil {
 		return true
@@ -150,8 +180,7 @@ func (k *Kube) floating(image string) bool {
 	return false
 }
 
-// images returns the tag-referenced images of containers and initContainers.
-// Images already pinned by digest are skipped.
+// images returns the images of containers and initContainers.
 func images(obj *unstructured.Unstructured, podSpec []string) []string {
 	var out []string
 	for _, field := range []string{"containers", "initContainers"} {
@@ -162,7 +191,7 @@ func images(obj *unstructured.Unstructured, podSpec []string) []string {
 				continue
 			}
 			img, _ := m["image"].(string)
-			if img == "" || strings.Contains(img, "@") {
+			if img == "" {
 				continue
 			}
 			out = append(out, img)

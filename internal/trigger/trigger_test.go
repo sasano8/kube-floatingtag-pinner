@@ -5,7 +5,9 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
+	"github.com/sasano8/kube-floatingtag-pinner/internal/state"
 	"github.com/sasano8/kube-floatingtag-pinner/internal/trigger"
 )
 
@@ -154,5 +156,120 @@ func TestErrorFindingGoesToNoneByDefault(t *testing.T) {
 	f := trigger.Finding{Resource: trigger.Resource{Kind: "Deployment", Name: "d"}, Status: trigger.StatusError, Err: errors.New("boom")}
 	if err := a.Act(context.Background(), f); err != nil || len(none.got) != 1 {
 		t.Fatalf("%v %d", err, len(none.got))
+	}
+}
+
+func mismatch(name string, local ...string) trigger.Finding {
+	return trigger.Finding{
+		Resource: trigger.Resource{Kind: "Deployment", Name: name, Actions: map[string]string{"mismatch": "other"}},
+		Image:    img, Status: trigger.StatusMismatch, Local: local, Mismatches: []trigger.Mismatch{{}},
+	}
+}
+
+func TestActionIsRequestedOncePerLocalState(t *testing.T) {
+	none, other := &recorder{name: "none"}, &recorder{name: "other"}
+	a := trigger.NewActor(none, other)
+	ctx := context.Background()
+	a.BeginPass()
+	for range 3 { // three passes of a daemon: the resource still differs
+		if err := a.Act(ctx, mismatch("web", "sha256:B")); err != nil {
+			t.Fatal(err)
+		}
+		a.BeginPass()
+	}
+	if len(other.got) != 1 {
+		t.Fatalf("asked %d times for the same local state", len(other.got))
+	}
+	if err := a.Act(ctx, mismatch("web", "sha256:C")); err != nil || len(other.got) != 2 {
+		t.Fatalf("a new local digest is a new state: %v %d", err, len(other.got))
+	}
+	if err := a.Act(ctx, mismatch("api", "sha256:C")); err != nil || len(other.got) != 3 {
+		t.Fatalf("another resource is asked separately: %v %d", err, len(other.got))
+	}
+}
+
+func TestDryRunIsNotRemembered(t *testing.T) {
+	other := &recorder{name: "other"}
+	a := trigger.NewActor(&recorder{name: "none"}, other)
+	a.DryRun = true
+	a.Act(context.Background(), mismatch("web", "sha256:B"))
+	a.DryRun = false
+	if err := a.Act(context.Background(), mismatch("web", "sha256:B")); err != nil || len(other.got) != 1 {
+		t.Fatalf("a dry run must not use up the request: %v %d", err, len(other.got))
+	}
+}
+
+func TestMaxActionsCapsAPass(t *testing.T) {
+	other := &recorder{name: "other"}
+	a := trigger.NewActor(&recorder{name: "none"}, other)
+	a.MaxActions = 2
+	ctx := context.Background()
+	a.BeginPass()
+	for _, n := range []string{"a", "b", "c"} {
+		a.Act(ctx, mismatch(n, "sha256:B"))
+	}
+	if len(other.got) != 2 {
+		t.Fatalf("cap of 2: asked %d", len(other.got))
+	}
+	a.BeginPass() // the next pass counts from zero, and the skipped one was not remembered
+	a.Act(ctx, mismatch("c", "sha256:B"))
+	if len(other.got) != 3 {
+		t.Fatalf("asked %d", len(other.got))
+	}
+}
+
+type failing struct{ recorder }
+
+func (f *failing) Do(context.Context, trigger.Finding) error { return errors.New("forbidden") }
+
+func TestFailureAndNoEffectAreRecordedInTheStore(t *testing.T) {
+	st := state.NewMemory()
+	bad := &failing{recorder{name: "other"}}
+	a := trigger.NewActor(&recorder{name: "none"}, bad)
+	a.Store = st
+	a.Now = func() time.Time { return time.Unix(100, 0) }
+	ctx := context.Background()
+	f := mismatch("web", "sha256:B")
+	key := state.Key{Resource: f.Resource.String(), Image: img, State: "mismatch", Action: "other"}
+
+	if err := a.Act(ctx, f); err == nil {
+		t.Fatal("the failure must be returned")
+	}
+	rec, ok := st.Get(key)
+	if !ok || rec.Failures != 1 || rec.LastError != "forbidden" || rec.Local != "sha256:B" || !rec.RequestedAt.Equal(time.Unix(100, 0)) {
+		t.Fatalf("%+v %v", rec, ok)
+	}
+
+	// the same local state again: not asked again (as before), and counted as having had no effect
+	if err := a.Act(ctx, f); err != nil {
+		t.Fatalf("%v", err)
+	}
+	if rec, _ = st.Get(key); rec.StillDifferent != 1 || rec.Failures != 1 {
+		t.Fatalf("%+v", rec)
+	}
+
+	// a new local digest is a new state; a success clears the failures
+	ok2 := &recorder{name: "other"}
+	b := trigger.NewActor(&recorder{name: "none"}, ok2)
+	b.Store = st
+	if err := b.Act(ctx, mismatch("web", "sha256:C")); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ = st.Get(key); rec.Failures != 0 || rec.LastError != "" || rec.Local != "sha256:C" {
+		t.Fatalf("%+v", rec)
+	}
+}
+
+func TestTheStoreIsShared(t *testing.T) {
+	st := state.NewMemory() // e.g. a Store that outlives one Actor: a second process, a restarted daemon
+	first, second := &recorder{name: "other"}, &recorder{name: "other"}
+	a := trigger.NewActor(&recorder{name: "none"}, first)
+	a.Store = st
+	b := trigger.NewActor(&recorder{name: "none"}, second)
+	b.Store = st
+	a.Act(context.Background(), mismatch("web", "sha256:B"))
+	b.Act(context.Background(), mismatch("web", "sha256:B"))
+	if len(first.got) != 1 || len(second.got) != 0 {
+		t.Fatalf("what one actor asked for, the other must not ask again: %d %d", len(first.got), len(second.got))
 	}
 }

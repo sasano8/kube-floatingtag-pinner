@@ -54,11 +54,11 @@ kubelet / Knative に新しいイメージを取り直させる。リモート�
   （ksvc は Revision の `status.containerStatuses[].imageDigest`）を比べ、不一致なら再デプロイする。
   実行中のものを見るので、ツールが止まっていた間の変化や、最初から古かったリソースも拾える。
 - 操作（種類ごと）:
-  - Deployment / StatefulSet / DaemonSet: Pod を削除する（spec を触らない）。または Pod テンプレートに
-    `restartedAt` の annotation を付けて段階的に入れ替える。
-  - Knative Service: Pod を消しても同じ digest で作り直されるだけ（Revision は不変）。ksvc の `spec.template` に
-    annotation を足して新しい Revision を作る（タグはそのときに解決し直される）。
-- どの操作をするかは「アクション」として切り離し、状態ごとに annotation で指定する（`floatingtag-pinner/on-mismatch: none | delete-pods | restart | new-revision`。
+  - `rollout`（実装済み）: Deployment / StatefulSet / DaemonSet / Knative Service の Pod テンプレートに annotation を足して、新しい世代を出す
+    （Knative では新しい Revision。タグはそのときに解決し直される）。
+  - `delete-pods`（実装済み）: Deployment / StatefulSet / DaemonSet の、`mismatch` だった Pod を削除する（spec を触らない）。
+    Knative は対象外（Pod を消しても同じ digest で作り直されるだけ。Revision は不変）。
+- どの操作をするかは「アクション」として切り離し、状態ごとに annotation で指定する（`floatingtag-pinner/on-mismatch: none | rollout | delete-pods`。
   `on-not-pulled` は任意）。既定は `none`（何もしない）。見つけたことは、アクションと別に、常にログに出る（`--log-level`、`--log-states`）。
   コマンドは `pinner trigger`。詳細は [docs/design.md](./docs/design.md)。
 - 前提: 再デプロイで新しいイメージを使うには、ノードの `latest` タグが新しいイメージを指している必要がある
@@ -74,14 +74,6 @@ kubelet / Knative に新しいイメージを取り直させる。リモート�
 - ツールが止まると、固定された古い digest のまま残り、新しい Pod もそれを使う。
 - Kyverno / OPA のポリシー（タグ必須、署名検証）に弾かれうる。
 - Knative で、`latest@sha256:…` への書き換えが期待どおり新 Revision を作るか未確認。
-
-## 第三段階: Argo CD との折り合い（第二段階の実運用前に確認）
-
-image を書き換えないので、selfHeal との衝突は大きく減る。ただし次を確認する。
-
-- Pod の削除は spec を変えないので影響しない見込み。
-- テンプレートへの annotation（`restartedAt` や ksvc の template annotation）を、Argo CD が差分として戻さないか。
-  戻す場合は `ignoreDifferences` を使う。
 
 ## 未確認事項
 

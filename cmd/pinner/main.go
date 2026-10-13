@@ -117,7 +117,7 @@ func setupPull(args []string) job {
 	pullSecret := fs.String("pull-secret", "", "imagePullSecret name (in --pull-namespace) for private registries")
 	pullTimeout := fs.Duration("pull-timeout", 2*time.Minute, "per-node timeout for a pull")
 	fs.Parse(args)
-	rep := setupLogging(c, report.Match, report.Mismatch, report.NotPulled, report.Error)
+	rep := setupLogging(c, "pull", report.Match, report.Mismatch, report.NotPulled, report.Error)
 
 	policy, err := collector.ParseOnNew(*onNew)
 	if err != nil {
@@ -138,7 +138,7 @@ func setupTrigger(args []string) job {
 	fs := flag.NewFlagSet("pinner trigger", flag.ExitOnError)
 	c := registerCommon(fs, "run no action: log which action would have run")
 	fs.Parse(args)
-	rep := setupLogging(c, report.Match, report.Mismatch, report.NotPulled, report.NotRunning, report.Error)
+	rep := setupLogging(c, "trigger", report.Match, report.Mismatch, report.NotPulled, report.NotRunning, report.Error)
 
 	client := newClient(*c.kubeconfig)
 	det := &trigger.Detector{
@@ -152,7 +152,7 @@ func setupTrigger(args []string) job {
 }
 
 // setupLogging installs the logger at --log-level and returns the reporter for --log-states.
-func setupLogging(c *common, allowed ...report.State) report.Reporter {
+func setupLogging(c *common, stage string, allowed ...report.State) report.Reporter {
 	level, err := report.ParseLevel(*c.logLevel)
 	if err != nil {
 		fatal(err)
@@ -162,7 +162,7 @@ func setupLogging(c *common, allowed ...report.State) report.Reporter {
 	if err != nil {
 		fatal(err)
 	}
-	return report.Reporter{States: states}
+	return report.Reporter{Stage: stage, States: states}
 }
 
 func newClient(kubeconfig string) dynamic.Interface {
@@ -190,12 +190,12 @@ func newLocal(kind string, node *local.Node) *local.Node {
 func pullPass(ctx context.Context, c *collector.Collector, rep report.Reporter) bool {
 	results, err := c.CollectOnce(ctx)
 	if err != nil {
-		slog.Error("collect failed", "err", err)
+		slog.Error(rep.Msg("collect failed"), "err", err)
 		return false
 	}
 	ok := true
 	for _, r := range results {
-		attrs := []any{"stage", "pull", "image", r.Image, "owners", r.Owners, "remote", r.Remote, "local", r.Local}
+		attrs := []any{"image", r.Image, "owners", r.Owners, "remote", r.Remote, "local", r.Local}
 		switch {
 		case r.Status == collector.StatusError:
 			ok = false
@@ -211,7 +211,7 @@ func pullPass(ctx context.Context, c *collector.Collector, rep report.Reporter) 
 			}
 			rep.Emit(ctx, report.State(r.Status), attrs...)
 			if r.Pulled {
-				after := []any{"stage", "pull", "image", r.Image, "owners", r.Owners, "remote", r.Remote, "local", r.AfterLocal, "via", "pulling"}
+				after := []any{"image", r.Image, "owners", r.Owners, "remote", r.Remote, "local", r.AfterLocal, "via", "pulling"}
 				if r.AfterErr != nil {
 					ok = false
 					rep.Emit(ctx, report.Error, append(after, "err", r.AfterErr)...)
@@ -242,12 +242,12 @@ func pullOutcome(r collector.Result) string {
 func triggerPass(ctx context.Context, d *trigger.Detector, actor *trigger.Actor, rep report.Reporter) bool {
 	findings, err := d.Detect(ctx)
 	if err != nil {
-		slog.Error("detect failed", "err", err)
+		slog.Error(rep.Msg("detect failed"), "err", err)
 		return false
 	}
 	ok := true
 	for _, f := range findings {
-		attrs := []any{"stage", "trigger", "resource", f.Resource.String(), "image", f.Image}
+		attrs := []any{"resource", f.Resource.String(), "image", f.Image}
 		switch f.Status {
 		case trigger.StatusError:
 			ok = false // the exit code reports it whatever the action does
@@ -267,7 +267,7 @@ func triggerPass(ctx context.Context, d *trigger.Detector, actor *trigger.Actor,
 		case trigger.StatusMismatch, trigger.StatusNotPulled, trigger.StatusError:
 			if err := actor.Act(ctx, f); err != nil {
 				ok = false
-				slog.Error("action failed", "resource", f.Resource.String(), "image", f.Image, "err", err)
+				slog.Error(rep.Msg("action failed"), "resource", f.Resource.String(), "image", f.Image, "err", err)
 			}
 		}
 	}

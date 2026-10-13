@@ -40,7 +40,11 @@ func (e State) Level() slog.Level {
 
 // Reporter logs states through slog, skipping those filtered out by States.
 // The level threshold is the handler's (see ParseLevel).
+//
+// Every line starts with the stage that reported it ("pull mismatch", "trigger match"),
+// so the format is the same whether a command runs alone or one after the other.
 type Reporter struct {
+	Stage  string         // "pull" or "trigger"
 	States map[State]bool // nil = every state
 }
 
@@ -48,7 +52,15 @@ func (r Reporter) Emit(ctx context.Context, e State, attrs ...any) {
 	if r.States != nil && !r.States[e] {
 		return
 	}
-	slog.Log(ctx, e.Level(), string(e), attrs...)
+	slog.Log(ctx, e.Level(), r.Msg(string(e)), attrs...)
+}
+
+// Msg prefixes a message with the stage, for the lines that are not states.
+func (r Reporter) Msg(msg string) string {
+	if r.Stage == "" {
+		return msg
+	}
+	return r.Stage + " " + msg
 }
 
 // ParseLevel parses --log-level.

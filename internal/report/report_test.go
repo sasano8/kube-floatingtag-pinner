@@ -47,6 +47,16 @@ func TestStatesFilterAndLevelThreshold(t *testing.T) {
 	}
 }
 
+func TestLinesStartWithTheStage(t *testing.T) {
+	buf := capture(t, slog.LevelInfo)
+	report.Reporter{Stage: "pull"}.Emit(context.Background(), report.Mismatch)
+	report.Reporter{Stage: "trigger"}.Emit(context.Background(), report.Match)
+	out := buf.String()
+	if !strings.Contains(out, `msg="pull mismatch"`) || !strings.Contains(out, `msg="trigger match"`) {
+		t.Fatalf("%q", out)
+	}
+}
+
 func TestParse(t *testing.T) {
 	if _, err := report.ParseLevel("warn"); err != nil {
 		t.Fatal(err)

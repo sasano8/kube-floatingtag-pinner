@@ -59,7 +59,7 @@ func (a *Actor) Act(ctx context.Context, f Finding) error {
 		return fmt.Errorf("%s: action %q does not support %s", f.Resource, name, f.Kind)
 	}
 	if a.DryRun && name != DefaultAction {
-		slog.Info("dry-run: would run action", "resource", f.Resource.String(), "image", f.Image,
+		slog.Info("trigger dry-run: would run action", "resource", f.Resource.String(), "image", f.Image,
 			"state", string(f.Status), "action", name)
 		return nil
 	}
@@ -69,7 +69,7 @@ func (a *Actor) Act(ctx context.Context, f Finding) error {
 	if name != DefaultAction {
 		// Fire and forget: what the action causes is up to Kubernetes, and is not followed.
 		// The next pass observes the new state.
-		slog.Info("action requested", "resource", f.Resource.String(), "image", f.Image,
+		slog.Info("trigger action requested", "resource", f.Resource.String(), "image", f.Image,
 			"state", string(f.Status), "action", name)
 	}
 	return nil

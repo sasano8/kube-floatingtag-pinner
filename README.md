@@ -144,25 +144,28 @@ digest を別に記録することはしない（正本はリモートのレジ�
 
 `--daemon` で `match` が毎回出てうるさいときは、`--log-level=warn` か `--log-states=mismatch,not-pulled,error` で絞れる。
 
+ログの行は、報告した段階の接頭辞（`pull` / `trigger`）で始まる（`pull mismatch`、`trigger match` など）。
+単体で実行しても、`sync`（`pull` → `trigger` を続けて実行）で実行しても、同じ形式になる。
+
 状態の扱いは、段階で違う。
 
 - **第一段階（`pull`）: 状態が変化する。** `pull` は pull を自分で行い、そのあとローカルのタグを読み直して確かめる。
   最初の状態と、pull したあとの状態を、続けて出す（`via=pulling`）。pull のあとも `mismatch` のままなら、そう出る
   （pull の間にタグがさらに進んだ、など）。ノードの状態の更新は遅れるので、読み直しは最大 30 秒、数秒おきに繰り返す。
-- **第二段階（`trigger`）: 投げっぱなし。** 最初の状態を報告し、アクションを依頼する（`action requested`）だけで、
+- **第二段階（`trigger`）: 投げっぱなし。** 最初の状態を報告し、アクションを依頼する（`trigger action requested`）だけで、
   そのあと何が起きるかは Kubernetes の pull の仕組みに任せ、確かめない。結果は、次の実行で、新しい「最初の状態」として分かる。
 
 `pull` の出力は、イメージごとに 1 行のログ（次は形式の例。実クラスタで取った出力ではない）。
 
 ```
-level=INFO msg=match stage=pull image=ghcr.io/sasano8/app-authorization-demo:latest owners=[tutorial/Deployment/web] remote=sha256:bf16c8e0… local=[sha256:bf16c8e0…]
+level=INFO msg="pull match" image=ghcr.io/sasano8/app-authorization-demo:latest owners=[tutorial/Deployment/web] remote=sha256:bf16c8e0… local=[sha256:bf16c8e0…]
 
 # 違いがあって pull した: 状態が変化する
-level=WARN msg=mismatch stage=pull image=ghcr.io/sasano8/app-authorization-demo:latest owners=[app-authorization-demo/Service/app-authorization-demo] remote=sha256:bf16c8e0… local=[sha256:4a45bcf8…] outcome=pulled
-level=INFO msg=match stage=pull image=ghcr.io/sasano8/app-authorization-demo:latest owners=[app-authorization-demo/Service/app-authorization-demo] remote=sha256:bf16c8e0… local=[sha256:bf16c8e0…] via=pulling
+level=WARN msg="pull mismatch" image=ghcr.io/sasano8/app-authorization-demo:latest owners=[app-authorization-demo/Service/app-authorization-demo] remote=sha256:bf16c8e0… local=[sha256:4a45bcf8…] outcome=pulled
+level=INFO msg="pull match" image=ghcr.io/sasano8/app-authorization-demo:latest owners=[app-authorization-demo/Service/app-authorization-demo] remote=sha256:bf16c8e0… local=[sha256:bf16c8e0…] via=pulling
 
 # --dry-run: 最初の状態だけ
-level=WARN msg=mismatch stage=pull image=ghcr.io/sasano8/app-authorization-demo:latest owners=[…] remote=sha256:bf16c8e0… local=[sha256:4a45bcf8…] outcome=would-pull
+level=WARN msg="pull mismatch" image=ghcr.io/sasano8/app-authorization-demo:latest owners=[…] remote=sha256:bf16c8e0… local=[sha256:4a45bcf8…] outcome=would-pull
 ```
 
 `outcome` は、`pull` が違いに対してしたこと。
@@ -179,10 +182,10 @@ level=WARN msg=mismatch stage=pull image=ghcr.io/sasano8/app-authorization-demo:
 `trigger` の出力は、リソースとイメージごとに 1 行（これも形式の例）。
 
 ```
-level=INFO msg=match stage=trigger resource=tutorial/Deployment/web image=ghcr.io/sasano8/app-authorization-demo:latest local=[sha256:bf16c8e0…]
-level=WARN msg=mismatch stage=trigger resource=app-authorization-demo/Service/app-authorization-demo image=ghcr.io/sasano8/app-authorization-demo:latest running=revision=sha256:4a45bcf8… local=[sha256:bf16c8e0…]
-level=WARN msg=not-pulled stage=trigger resource=tutorial/Deployment/proxy image=docker.io/library/nginx:latest hint="the local cache does not hold this tag (run pull first)"
-level=INFO msg=not-running stage=trigger resource=tutorial/DaemonSet/agent image=ghcr.io/o/agent:latest hint="nothing to compare (scaled to zero, or no digest reported)"
+level=INFO msg="trigger match" resource=tutorial/Deployment/web image=ghcr.io/sasano8/app-authorization-demo:latest local=[sha256:bf16c8e0…]
+level=WARN msg="trigger mismatch" resource=app-authorization-demo/Service/app-authorization-demo image=ghcr.io/sasano8/app-authorization-demo:latest running=revision=sha256:4a45bcf8… local=[sha256:bf16c8e0…]
+level=WARN msg="trigger not-pulled" resource=tutorial/Deployment/proxy image=docker.io/library/nginx:latest hint="the local cache does not hold this tag (run pull first)"
+level=INFO msg="trigger not-running" resource=tutorial/DaemonSet/agent image=ghcr.io/o/agent:latest hint="nothing to compare (scaled to zero, or no digest reported)"
 ```
 
 状態の意味は上の表のとおり。`trigger` では、比べているのは、実行中の digest と、ローカルキャッシュ（ノードのイメージストア）のタグが指す digest。

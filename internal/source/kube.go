@@ -15,6 +15,7 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/sasano8/kube-floatingtag-pinner/internal/collector"
+	"github.com/sasano8/kube-floatingtag-pinner/internal/trigger"
 )
 
 // DefaultAnnotation marks a resource as a target (value "true").
@@ -46,12 +47,16 @@ type Kube struct {
 	FloatingTags []string
 }
 
-func (k *Kube) Targets(ctx context.Context) ([]collector.Target, error) {
+// ActionAnnotation names the action a resource wants when it runs a stale image.
+const ActionAnnotation = "floatingtag-pinner/action"
+
+// Resources lists the annotated resources with their floating-tag images.
+func (k *Kube) Resources(ctx context.Context) ([]trigger.Resource, error) {
 	ann := k.Annotation
 	if ann == "" {
 		ann = DefaultAnnotation
 	}
-	owners := map[string][]string{}
+	var out []trigger.Resource
 	for _, kd := range kinds {
 		list, err := k.Client.Resource(kd.gvr).Namespace(k.Namespace).List(ctx, metav1.ListOptions{})
 		if apierrors.IsNotFound(err) {
@@ -65,13 +70,38 @@ func (k *Kube) Targets(ctx context.Context) ([]collector.Target, error) {
 			if obj.GetAnnotations()[ann] != "true" {
 				continue
 			}
-			owner := fmt.Sprintf("%s/%s/%s", obj.GetNamespace(), obj.GetKind(), obj.GetName())
-			for _, img := range images(obj, kd.podSpec) {
-				if !k.floating(img) {
-					continue
-				}
-				owners[img] = append(owners[img], owner)
+			res := trigger.Resource{
+				Kind:      obj.GetKind(),
+				Namespace: obj.GetNamespace(),
+				Name:      obj.GetName(),
+				Action:    obj.GetAnnotations()[ActionAnnotation],
+				Selector:  selector(obj),
 			}
+			res.Revision, _, _ = unstructured.NestedString(obj.Object, "status", "latestReadyRevisionName")
+			for _, img := range images(obj, kd.podSpec) {
+				if k.floating(img) {
+					res.Images = append(res.Images, img)
+				}
+			}
+			if len(res.Images) > 0 {
+				out = append(out, res)
+			}
+		}
+	}
+	return out, nil
+}
+
+// Targets lists the floating-tag images of the annotated resources, de-duplicated,
+// with the resources that reference each.
+func (k *Kube) Targets(ctx context.Context) ([]collector.Target, error) {
+	resources, err := k.Resources(ctx)
+	if err != nil {
+		return nil, err
+	}
+	owners := map[string][]string{}
+	for _, r := range resources {
+		for _, img := range r.Images {
+			owners[img] = append(owners[img], r.String())
 		}
 	}
 	targets := make([]collector.Target, 0, len(owners))
@@ -81,6 +111,17 @@ func (k *Kube) Targets(ctx context.Context) ([]collector.Target, error) {
 	}
 	sort.Slice(targets, func(i, j int) bool { return targets[i].Image < targets[j].Image })
 	return targets, nil
+}
+
+// selector builds the pod label selector from spec.selector.matchLabels.
+func selector(obj *unstructured.Unstructured) string {
+	m, _, _ := unstructured.NestedStringMap(obj.Object, "spec", "selector", "matchLabels")
+	parts := make([]string, 0, len(m))
+	for k, v := range m {
+		parts = append(parts, k+"="+v)
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ",")
 }
 
 func (k *Kube) floating(image string) bool {

@@ -1,5 +1,7 @@
-// Command pinner collects images from annotated Kubernetes resources and
-// syncs the local cache (node image stores) with the remote registry.
+// Command pinner keeps what runs in Kubernetes in step with the floating tags
+// (e.g. :latest) of the remote registry, in two stages: pull syncs the local cache
+// (node image stores) from the remote registry; trigger finds the resources that run
+// an older image than the local cache holds and hands them to their action.
 package main
 
 import (
@@ -22,39 +24,128 @@ import (
 	"github.com/sasano8/kube-floatingtag-pinner/internal/local"
 	"github.com/sasano8/kube-floatingtag-pinner/internal/registry"
 	"github.com/sasano8/kube-floatingtag-pinner/internal/source"
+	"github.com/sasano8/kube-floatingtag-pinner/internal/trigger"
 )
 
 const usage = `usage: pinner <command> [flags]
 
 commands:
-  pull   stage 1: pull into the local cache (node image stores) what changed on the remote registry
+  pull      stage 1: pull into the local cache (node image stores) what changed on the remote registry
+  trigger   stage 2: find resources running an older image than the local cache, and run their action
 `
 
+// common holds the flags shared by every command.
+type common struct {
+	kubeconfig *string
+	namespace  *string
+	annotation *string
+	floating   *string
+	localKind  *string
+	daemon     *bool
+	interval   *time.Duration
+	dryRun     *bool
+}
+
+func registerCommon(fs *flag.FlagSet, dryRunHelp string) *common {
+	return &common{
+		kubeconfig: fs.String("kubeconfig", "", "path to kubeconfig (default: in-cluster, then ~/.kube/config)"),
+		namespace:  fs.String("namespace", "", "namespace to watch (default: all)"),
+		annotation: fs.String("annotation", source.DefaultAnnotation, "annotation that marks target resources"),
+		floating:   fs.String("floating-tags", "latest", "comma-separated tags to track; images with other tags are ignored (empty = all tags)"),
+		localKind:  fs.String("local", "node", "local cache: node (container runtime image store of the nodes)"),
+		daemon:     fs.Bool("daemon", false, "keep running: repeat every --interval until stopped (default: run once and exit)"),
+		interval:   fs.Duration("interval", 5*time.Minute, "with --daemon: time between passes"),
+		dryRun:     fs.Bool("dry-run", false, dryRunHelp),
+	}
+}
+
 func main() {
-	if len(os.Args) < 2 || os.Args[1] != "pull" {
+	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
 	}
+	var j job
+	switch os.Args[1] {
+	case "pull":
+		j = setupPull(os.Args[2:])
+	case "trigger":
+		j = setupTrigger(os.Args[2:])
+	default:
+		fmt.Fprint(os.Stderr, usage)
+		os.Exit(2)
+	}
+	j.run()
+}
+
+// job is one command's pass, and whether to repeat it.
+type job struct {
+	pass     func(context.Context) bool // reports whether the pass succeeded
+	daemon   bool
+	interval time.Duration
+}
+
+// run executes one pass and exits non-zero on failure, or repeats it with --daemon.
+func (j job) run() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if !j.daemon {
+		if !j.pass(ctx) {
+			os.Exit(1)
+		}
+		return
+	}
+	for {
+		j.pass(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(j.interval):
+		}
+	}
+}
+
+func setupPull(args []string) job {
 	fs := flag.NewFlagSet("pinner pull", flag.ExitOnError)
-	daemon := fs.Bool("daemon", false, "keep running: collect every --interval until stopped (default: collect once and exit)")
-	kubeconfig := fs.String("kubeconfig", "", "path to kubeconfig (default: in-cluster, then ~/.kube/config)")
-	namespace := fs.String("namespace", "", "namespace to watch (default: all)")
-	annotation := fs.String("annotation", source.DefaultAnnotation, "annotation that marks target resources")
-	onNew := fs.String("on-new", string(collector.OnNewRegister), "for images with no record: register|ignore")
-	floating := fs.String("floating-tags", "latest", "comma-separated tags to track; images with other tags are ignored (empty = all tags)")
-	localKind := fs.String("local", "node", "local registry: node (container runtime image store of the nodes)")
-	dryRun := fs.Bool("dry-run", false, "report what would be pulled, without pulling")
+	c := registerCommon(fs, "report what would be pulled, without pulling")
+	onNew := fs.String("on-new", string(collector.OnNewRegister), "for images the local cache does not hold: register (pull) | ignore")
 	pullNS := fs.String("pull-namespace", "default", "namespace for the short-lived Pods that make nodes pull images")
 	pullSecret := fs.String("pull-secret", "", "imagePullSecret name (in --pull-namespace) for private registries")
 	pullTimeout := fs.Duration("pull-timeout", 2*time.Minute, "per-node timeout for a pull")
-	interval := fs.Duration("interval", 5*time.Minute, "with --daemon: time between passes")
-	fs.Parse(os.Args[2:])
+	fs.Parse(args)
 
 	policy, err := collector.ParseOnNew(*onNew)
 	if err != nil {
 		fatal(err)
 	}
-	cfg, err := restConfig(*kubeconfig)
+	client := newClient(*c.kubeconfig)
+	col := &collector.Collector{
+		Source:   &source.Kube{Client: client, Namespace: *c.namespace, Annotation: *c.annotation, FloatingTags: splitList(*c.floating)},
+		Registry: registry.Remote{},
+		Local:    newLocal(*c.localKind, &local.Node{Client: client, PullNamespace: *pullNS, PullSecret: *pullSecret, PullTimeout: *pullTimeout}),
+		OnNew:    policy,
+		DryRun:   *c.dryRun,
+	}
+	return job{pass: func(ctx context.Context) bool { return pullPass(ctx, col) }, daemon: *c.daemon, interval: *c.interval}
+}
+
+func setupTrigger(args []string) job {
+	fs := flag.NewFlagSet("pinner trigger", flag.ExitOnError)
+	c := registerCommon(fs, "run every action as info: report only, change nothing")
+	fs.Parse(args)
+
+	client := newClient(*c.kubeconfig)
+	det := &trigger.Detector{
+		Source:  &source.Kube{Client: client, Namespace: *c.namespace, Annotation: *c.annotation, FloatingTags: splitList(*c.floating)},
+		Local:   newLocal(*c.localKind, &local.Node{Client: client}),
+		Running: &source.KubeRunning{Client: client},
+	}
+	actor := trigger.NewActor(trigger.Info{}, trigger.None{})
+	actor.ForceInfo = *c.dryRun
+	return job{pass: func(ctx context.Context) bool { return triggerPass(ctx, det, actor) }, daemon: *c.daemon, interval: *c.interval}
+}
+
+func newClient(kubeconfig string) dynamic.Interface {
+	cfg, err := restConfig(kubeconfig)
 	if err != nil {
 		fatal(err)
 	}
@@ -62,43 +153,19 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-
-	var loc collector.Local
-	switch *localKind {
-	case "node":
-		loc = &local.Node{Client: client, PullNamespace: *pullNS, PullSecret: *pullSecret, PullTimeout: *pullTimeout}
-	default:
-		fatal(fmt.Errorf("unknown --local %q (supported: node)", *localKind))
-	}
-	c := &collector.Collector{
-		Source:   &source.Kube{Client: client, Namespace: *namespace, Annotation: *annotation, FloatingTags: splitList(*floating)},
-		Registry: registry.Remote{},
-		Local:    loc,
-		OnNew:    policy,
-		DryRun:   *dryRun,
-	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	if !*daemon {
-		if !pass(ctx, c) {
-			os.Exit(1)
-		}
-		return
-	}
-	for {
-		pass(ctx, c)
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(*interval):
-		}
-	}
+	return client
 }
 
-// pass runs one collection and logs the results. It reports whether it succeeded.
-func pass(ctx context.Context, c *collector.Collector) bool {
+// newLocal returns the local cache for --local. Only "node" exists so far.
+func newLocal(kind string, node *local.Node) *local.Node {
+	if kind != "node" {
+		fatal(fmt.Errorf("unknown --local %q (supported: node)", kind))
+	}
+	return node
+}
+
+// pullPass runs one collection and logs the results. It reports whether it succeeded.
+func pullPass(ctx context.Context, c *collector.Collector) bool {
 	results, err := c.CollectOnce(ctx)
 	if err != nil {
 		slog.Error("collect failed", "err", err)
@@ -127,6 +194,49 @@ func pass(ctx context.Context, c *collector.Collector) bool {
 	return ok
 }
 
+// triggerPass detects stale resources and hands each to its action. It reports whether it succeeded.
+func triggerPass(ctx context.Context, d *trigger.Detector, actor *trigger.Actor) bool {
+	findings, err := d.Detect(ctx)
+	if err != nil {
+		slog.Error("detect failed", "err", err)
+		return false
+	}
+	ok := true
+	for _, f := range findings {
+		attrs := []any{"resource", f.Resource.String(), "image", f.Image}
+		switch f.Status {
+		case trigger.StatusError:
+			ok = false
+			slog.Error("failed", append(attrs, "err", f.Err)...)
+		case trigger.StatusStale:
+			if err := actor.Act(ctx, f); err != nil {
+				ok = false
+				slog.Error("action failed", append(attrs, "err", err)...)
+			}
+		case trigger.StatusNoLocal:
+			slog.Info("no-local: the local cache does not hold this tag (run pull first)", attrs...)
+		case trigger.StatusNoRunning:
+			slog.Info("no-running: nothing to compare (scaled to zero, or no digest reported)", attrs...)
+		default:
+			slog.Info(string(f.Status), append(attrs, "local", f.Local)...)
+		}
+	}
+	return ok
+}
+
+func splitList(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var out []string
+	for _, v := range strings.Split(s, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 func fatal(err error) {
 	slog.Error("fatal", "err", err)
 	os.Exit(1)
@@ -142,17 +252,4 @@ func restConfig(path string) (*rest.Config, error) {
 	}
 	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
 		clientcmd.NewDefaultClientConfigLoadingRules(), nil).ClientConfig()
-}
-
-func splitList(s string) []string {
-	if s == "" {
-		return nil
-	}
-	var out []string
-	for _, v := range strings.Split(s, ",") {
-		if v = strings.TrimSpace(v); v != "" {
-			out = append(out, v)
-		}
-	}
-	return out
 }

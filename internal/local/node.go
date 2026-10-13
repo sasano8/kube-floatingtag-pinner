@@ -40,10 +40,31 @@ type Node struct {
 }
 
 // TagDigests returns the digests the image's tag points to on the nodes that hold
-// the tag. The node reports an image under several names (e.g. repo:latest and
+// the tag, as one sorted list. See NodeTagDigests.
+func (n *Node) TagDigests(ctx context.Context, image string) ([]string, error) {
+	byNode, err := n.NodeTagDigests(ctx, image)
+	if err != nil {
+		return nil, err
+	}
+	set := map[string]struct{}{}
+	for _, ds := range byNode {
+		for _, d := range ds {
+			set[d] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(set))
+	for d := range set {
+		out = append(out, d)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// NodeTagDigests returns, per node that holds the tag, the digests the tag points to.
+// The node reports an image under several names (e.g. repo:latest and
 // repo@sha256:…); the tag's digest is the one sharing an entry with the tag name.
 // Digests held without the tag (e.g. pulled by digest) are ignored.
-func (n *Node) TagDigests(ctx context.Context, image string) ([]string, error) {
+func (n *Node) NodeTagDigests(ctx context.Context, image string) (map[string][]string, error) {
 	parsed, err := name.ParseReference(image)
 	if err != nil {
 		return nil, fmt.Errorf("parse %q: %w", image, err)
@@ -58,8 +79,10 @@ func (n *Node) TagDigests(ctx context.Context, image string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list nodes: %w", err)
 	}
-	set := map[string]struct{}{}
+	out := map[string][]string{}
 	for i := range list.Items {
+		node := list.Items[i].GetName()
+		set := map[string]struct{}{}
 		imgs, _, _ := unstructured.NestedSlice(list.Items[i].Object, "status", "images")
 		for _, img := range imgs {
 			m, _ := img.(map[string]interface{})
@@ -84,12 +107,16 @@ func (n *Node) TagDigests(ctx context.Context, image string) ([]string, error) {
 				}
 			}
 		}
+		if len(set) == 0 {
+			continue
+		}
+		ds := make([]string, 0, len(set))
+		for d := range set {
+			ds = append(ds, d)
+		}
+		sort.Strings(ds)
+		out[node] = ds
 	}
-	out := make([]string, 0, len(set))
-	for d := range set {
-		out = append(out, d)
-	}
-	sort.Strings(out)
 	return out, nil
 }
 

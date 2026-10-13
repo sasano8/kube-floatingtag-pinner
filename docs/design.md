@@ -178,7 +178,7 @@ cmd/pinner  ──▶  internal/collector（収集と比較のロジック）
   1 回実行では、どれか 1 つでも失敗があれば終了コードは非 0。
 - リモートの digest は `remote.Head` で取る（イメージ本体は落とさない）。
 
-## 8. 第二段階の設計 [未実装]
+## 8. 第二段階の設計 [検知と `info` / `none` は実装済み。ほかのアクションは未実装]
 
 ### 比較
 
@@ -188,6 +188,16 @@ cmd/pinner  ──▶  internal/collector（収集と比較のロジック）
 - Knative: Revision の `imageDigest`。Pod の image は digest で固定されていて、タグは Revision / ksvc の spec にある。
 
 Pod から取るのは「タグ」と「digest」の両方。タグはどのローカルのエントリと比べるかの鍵で、比べるのは digest 同士。
+
+### 実装の状況
+
+- 検知（`internal/trigger` の `Detector`）: 実装済み。リソースの収集（`source.Kube.Resources`）、
+  ノードごとのローカルのタグの digest（`local.Node.NodeTagDigests`）、実行中の digest（`source.KubeRunning`）を比べる。
+  Pod はそのノードのタグと、Revision はローカル全体のタグと比べる。結果は `in-sync` / `stale` / `no-local` / `no-running` / `error`。
+- アクター（`Actor`）とアクション: `info`（既定）と `none` だけ実装済み。アクション名が未実装のときは、エラーにする。
+- `trigger --dry-run`: 実装済み。どのアクションも `info` として扱う。
+- 未実装: `delete-pods`、`restart`、`new-revision`、`sync`（pull → trigger）。
+- 実機では未確認。
 
 ### アクター（Actor）とアクション（Action）
 

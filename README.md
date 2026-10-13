@@ -99,11 +99,13 @@ digest を別に記録することはしない（正本はリモートのレジ�
 | コマンド | 内容 | 状態 |
 | --- | --- | --- |
 | `pinner pull` | 第一段階: リモートで変わったイメージを、ローカルキャッシュに pull する | 実装済み |
-| `pinner trigger` | 第二段階: ローカルを正に、実行中のものが古ければ、指定のアクションを引き起こす（結果はアクション次第で、保証しない） | 未実装 |
+| `pinner trigger` | 第二段階: ローカルを正に、実行中のものが古ければ、指定のアクションを引き起こす（結果はアクション次第で、保証しない） | 検知と `info` / `none` のみ実装済み |
 | `pinner sync` | `pull` → `trigger` を続けて行う | 未実装 |
 
 どのコマンドも、既定は 1 回実行して終了。`--daemon`（と `--interval`）で常駐して繰り返す。
-第二段階はアクション（Pod の削除など）の実行を伴うので、`pull` だけでは動かない。第二段階まで行うときは、`trigger` か `sync` を明示する。
+第二段階はアクション（将来は Pod の削除など）の実行を伴うので、`pull` だけでは動かない。第二段階まで行うときは、`trigger` か `sync` を明示する。
+現状の `trigger` のアクションは `info`（差分をログに出す。既定）と `none`（何もしない）だけで、リソースには何も変更しない。
+`delete-pods` などは未実装で、指定するとエラーになる。
 アクションは、リソースの annotation `floatingtag-pinner/action` で指定する。未指定は `info`（差分をログに出すだけ）で、リソースには何も変更しない。`none` は、検知した結果にも何もしない。
 
 ## インストール
@@ -112,6 +114,7 @@ digest を別に記録することはしない（正本はリモートのレジ�
 
 - 必要なもの: 対象クラスタに届く `kubeconfig`。
 - 権限: Node の list、対象リソース（Deployment など）の list、`--pull-namespace` での Pod の create / get / delete。
+  `trigger` は読み取りのみ（Pod の list、Knative の Revision の get）。
   手元の `kubeconfig` が管理者権限なら、追加の設定は要らない。
 
 ### バイナリをダウンロードする
@@ -184,6 +187,15 @@ CI は、あわせて `ghcr.io/sasano8/kube-floatingtag-pinner`（amd64 / arm64 
    `repo:latest` と同じエントリに、リモートの digest（`repo@sha256:…`）が載っていれば成功。
    もう一度 `pull` を実行すると、`unchanged` になる。
 
+5. 動いているものが古いかを調べる（`trigger`。何も変更しない）。
+
+   ```sh
+   ./pinner trigger --namespace app-authorization-demo
+   ```
+
+   Revision がローカルより古ければ、`stale` と出る。新しい Revision ができていれば `in-sync`。
+   Knative が scale to zero していて Pod が無くても、Revision の `imageDigest` と比べられる。
+
 ## 実行例
 
 ```sh
@@ -193,8 +205,11 @@ CI は、あわせて `ghcr.io/sasano8/kube-floatingtag-pinner`（amd64 / arm64 
 ./pinner pull --floating-tags=latest,dev --namespace=tutorial --pull-secret=ghcr-pull
 ./pinner pull --daemon --interval 5m   # 常駐して、5分ごとに繰り返す
 
-# 第二段階（未実装・予定）
-./pinner trigger                       # 第二段階だけ
+# 第二段階: 実行中のものがローカルより古いかを調べる（現状は info のみ。何も変更しない）
+./pinner trigger
+./pinner trigger --namespace app-authorization-demo
+
+# 未実装（予定）
 ./pinner sync --daemon                 # pull → trigger を、続けて繰り返す
 ```
 
@@ -212,6 +227,20 @@ level=WARN msg=new       image=docker.io/library/nginx:latest owners=[tutorial/D
 - `new`: ローカルがそのタグを持っていなかった。`--on-new=register`（既定）なら pull する。`ignore` なら `ignored` と出して何もしない。
 - `(dry-run: would pull)`: `--dry-run` のとき、pull が必要だったもの（pull はしていない）。
 - 1 つでも失敗（認証、タイムアウトなど）があると、終了コードは非 0。
+
+`trigger` の出力は、リソースとイメージごとに 1 行（これも形式の例）。
+
+```
+level=INFO msg=in-sync resource=tutorial/Deployment/web image=ghcr.io/sasano8/app-authorization-demo:latest local=[sha256:bf16c8e0…]
+level=WARN msg=stale resource=app-authorization-demo/Service/app-authorization-demo image=ghcr.io/sasano8/app-authorization-demo:latest running=revision=sha256:4a45bcf8… local=[sha256:bf16c8e0…]
+level=INFO msg="no-local: the local cache does not hold this tag (run pull first)" resource=tutorial/Deployment/proxy image=docker.io/library/nginx:latest
+level=INFO msg="no-running: nothing to compare (scaled to zero, or no digest reported)" resource=tutorial/DaemonSet/agent image=ghcr.io/o/agent:latest
+```
+
+- `in-sync`: 動いているものが、ローカルのタグが指す digest と同じ。
+- `stale`: 動いているものが、ローカルのタグの指す digest と違う。アクション（現状は `info` のログ）が実行された。
+- `no-local`: ローカルがそのタグを持っていない。先に `pull` を実行する。
+- `no-running`: 比べる相手が無い（Pod が 0、Revision がまだ ready でない、など）。
 
 | フラグ | 既定値 | 説明 |
 | --- | --- | --- |
@@ -260,6 +289,6 @@ Keel・Knative 本体・Argo CD Image Updater では、ksvc の `latest` 追従�
 ## 未決事項
 
 - コマンド名（`pull` / `trigger`）は決定。両方を続けて行う `sync` は仮。
-- 第二段階（`trigger`、アクター、アクション）の実装。
+- 第二段階のアクション（`delete-pods`、`restart`、`new-revision`）と `--dry-run` 以外の指定、`sync`。
 - 任意のレジストリを同期先にする `--local`（`registry`）。
 - Argo CD の `selfHeal` との折り合い（第二段階の実運用前に確認。[docs/design.md](./docs/design.md) 参照）。

@@ -128,3 +128,18 @@ func TestPullReportsImagePullError(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestNodeTagDigestsPerNode(t *testing.T) {
+	gvr := schema.GroupVersionResource{Version: "v1", Resource: "nodes"}
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "NodeList"},
+		node("n1", []string{"ghcr.io/o/app@sha256:aaa", "ghcr.io/o/app:latest"}),
+		node("n2", []string{"ghcr.io/o/app@sha256:bbb", "ghcr.io/o/app:latest"}),
+		node("n3", []string{"ghcr.io/o/app@sha256:ccc"}), // digest only: not reported
+	)
+	got, err := (&local.Node{Client: client}).NodeTagDigests(context.Background(), "ghcr.io/o/app:latest")
+	want := map[string][]string{"n1": {"sha256:aaa"}, "n2": {"sha256:bbb"}}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v err %v", got, err)
+	}
+}

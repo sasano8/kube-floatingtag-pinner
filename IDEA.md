@@ -45,7 +45,7 @@ annotation で対象を指定したワークロード（Deployment / StatefulSet
 - レジストリ認証（非公開レジストリ）と、rate limit（Docker Hub の匿名アクセスの上限）の確認。
 - 結果の出力先の追加: Event / メトリクス（現状はログのみ）。
 
-## 第二段階: 再デプロイ
+## 第二段階: アクション（組み込みは再デプロイ）
 
 spec の image は書き換えない（ユーザーの管轄のものにはあまり触らない）。実行中のものが古ければ、再デプロイして
 kubelet / Knative に新しいイメージを取り直させる。リモートレジストリは登場しない（pull は第一段階が済ませている）。
@@ -58,7 +58,8 @@ kubelet / Knative に新しいイメージを取り直させる。リモート�
     `restartedAt` の annotation を付けて段階的に入れ替える。
   - Knative Service: Pod を消しても同じ digest で作り直されるだけ（Revision は不変）。ksvc の `spec.template` に
     annotation を足して新しい Revision を作る（タグはそのときに解決し直される）。
-- どの操作をするかは annotation で指定する（案: `floatingtag-pinner/action: delete-pods | restart | none`）。
+- どの操作をするかは「アクション」として切り離し、annotation で指定する（案: `floatingtag-pinner/action: none | delete-pods | restart | new-revision`）。
+  未指定は `none`（検知とログだけ）。コマンドは `pinner apply`。詳細は [docs/design.md](./docs/design.md)。
 - 前提: 再デプロイで新しいイメージを使うには、ノードの `latest` タグが新しいイメージを指している必要がある
   （第一段階の pull をタグ指定にしている理由）。
 

@@ -21,6 +21,7 @@ pinner trigger [flags]
 | --- | --- | --- | --- |
 | `--annotation` | string | `floatingtag-pinner/enabled` | annotation that marks target resources |
 | `--daemon` | bool | `false` | keep running: repeat every --interval until stopped (default: run once and exit) |
+| `--debug` | bool | `false` | shorthand for --log-level=debug: also log how each node pulled, and what the nodes and the Pods report |
 | `--digest-length` | int | `12` | hex characters of a sha256 digest to show in the log, then "..." (0 = the whole digest) |
 | `--dry-run` | bool | `false` | run no action: log which action would have run |
 | `--floating-tags` | string | `latest` | comma-separated tags to track; images with other tags are ignored (empty = all tags) |

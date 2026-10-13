@@ -5,9 +5,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -116,6 +119,10 @@ func (n *Node) NodeTagDigests(ctx context.Context, image string) (map[string][]s
 		}
 		sort.Strings(ds)
 		out[node] = ds
+		slog.Debug("local: node tag digests", "image", image, "node", node, "digests", ds)
+	}
+	if len(out) == 0 {
+		slog.Debug("local: no node holds the tag", "image", image)
 	}
 	return out, nil
 }
@@ -182,8 +189,11 @@ func (n *Node) pullOn(ctx context.Context, node, ref, digest string) (string, er
 	if timeout == 0 {
 		timeout = 2 * time.Minute
 	}
-	sum := sha256.Sum256([]byte(ref + "|" + digest + "|" + node))
+	// A name unique to this attempt: with a fixed name, a Pod left from the last run (still terminating)
+	// would make Create fail with AlreadyExists, and its old status would be read as this pull's result.
+	sum := sha256.Sum256([]byte(ref + "|" + digest + "|" + node + "|" + strconv.FormatInt(time.Now().UnixNano(), 10)))
 	podName := "pinner-pull-" + hex.EncodeToString(sum[:5])
+	started := time.Now()
 
 	spec := map[string]interface{}{
 		"nodeName":      node,
@@ -225,6 +235,10 @@ func (n *Node) pullOn(ctx context.Context, node, ref, digest string) (string, er
 			return "", fmt.Errorf("get pull pod: %w", err)
 		}
 		if d, done, err := pullState(got); done || err != nil {
+			css, _, _ := unstructured.NestedSlice(got.Object, "status", "containerStatuses")
+			status, _ := json.Marshal(css)
+			slog.Debug("pull: node finished", "node", node, "pod", podName, "image", ref, "pullPolicy", "Always",
+				"took", time.Since(started).Round(time.Millisecond).String(), "digest", d, "err", err, "containerStatuses", string(status))
 			return d, err
 		}
 		select {

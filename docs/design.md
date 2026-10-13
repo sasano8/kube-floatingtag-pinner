@@ -137,6 +137,18 @@ pull のあとも `local=[bf16c8e0…]` のままで、`pull mismatch` が繰り
 pull のあとの状態を、pull 用 Pod が報告した digest から求める方式（下）は、この不具合でも役に立った: `outcome=pulled` と言いながら、
 続く `via=pulling` の行が `mismatch` のままで、「pull したが、揃っていない」と正しく出た。
 
+**pull 用 Pod の名前は、毎回違うものにする。** 最初は、（タグ参照、digest、ノード名）のハッシュで、同じ状況なら同じ名前だった。
+直前の実行の Pod が、まだ消えかけの状態で残っていると、`Create` が `AlreadyExists` になり、**古い Pod の状態（古い digest）を、今回の pull の結果として読んでしまう**
+おそれがある。そこで、名前に、実行ごとの値（時刻）を混ぜて、衝突させないようにした。
+
+### デバッグと、どのビルドか
+
+- `--debug`（= `--log-level=debug`）で、ノードごとの pull の結果（Pod の `containerStatuses` の中身を含む）、ノードが報告するタグの digest、
+  動いている Pod / Revision が報告する `imageID` / `imageDigest` を、ログに出す。通常のログは、結果の状態だけで、「なぜそうなったか」は見えないため。
+- `pinner version` で、どのビルドか（コミット、Go のバージョン）が分かる。CI は、`-X main.commit=<sha>` でコミットを埋め込む
+  （Release のバイナリ、コンテナイメージ）。手元で git のチェックアウトからビルドしたときは、ビルド情報のリビジョンを使う（変更があれば `+modified`）。
+  実機で、修正前のバイナリを使っていたのか、修正後でも直らないのかが、区別できなかったことが、きっかけ。
+
 ### なぜタグ指定で pull するか
 
 ワークロードと同じ `repo:latest` で pull する。digest 指定（`repo@sha256:…`）で pull すると、イメージ本体はノードに入るが、

@@ -78,6 +78,10 @@ kubectl -n "$NS" patch deployment app --type=json \
 kubectl -n "$NS" annotate deployment app floatingtag-pinner/enabled=true
 kubectl -n "$NS" rollout status deployment/app --timeout=180s
 
+step "collect: the annotated Deployment and its tracked image are listed"
+run_pinner collect || fail "collect exited non-zero"
+expect "e2e/Deployment/app +localhost:5001/e2e/app:latest +yes"
+
 step "pull: the local tag already follows the remote -> match"
 run_pinner pull || fail "pull exited non-zero"
 expect 'msg="pull match"'

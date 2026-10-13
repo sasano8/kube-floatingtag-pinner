@@ -15,10 +15,17 @@ type Resource struct {
 	Kind      string // Deployment, StatefulSet, DaemonSet, or Service (Knative)
 	Namespace string
 	Name      string
-	Images    []string
+	Images    []string          // the images to track (floating tags)
+	Skipped   []Skipped         // images of the resource that are not tracked, and why
 	Actions   map[string]string // state ("mismatch", "not-pulled", "error") -> action name, from the on-<state> annotations
 	Selector  string            // pod label selector (workloads)
 	Revision  string            // latest ready Revision (Knative Service)
+}
+
+// Skipped is an image the resource uses that is not tracked.
+type Skipped struct {
+	Image  string
+	Reason string
 }
 
 func (r Resource) String() string { return fmt.Sprintf("%s/%s/%s", r.Namespace, r.Kind, r.Name) }

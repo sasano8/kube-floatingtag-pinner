@@ -3,6 +3,7 @@ package source_test
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/sasano8/kube-floatingtag-pinner/internal/collector"
 	"github.com/sasano8/kube-floatingtag-pinner/internal/source"
+	"github.com/sasano8/kube-floatingtag-pinner/internal/trigger"
 )
 
 func obj(apiVersion, kind, ns, name string, annotated bool, containers ...string) *unstructured.Unstructured {
@@ -56,5 +58,31 @@ func TestTargets(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v want %+v", got, want)
+	}
+}
+
+func TestResourcesSaysWhyAnImageIsNotTracked(t *testing.T) {
+	dep := obj("apps/v1", "Deployment", "a", "web", true,
+		"r/app:latest", "r/app:latest", "r/side@sha256:abc", "r/fixed:v1.2.3")
+	none := obj("apps/v1", "Deployment", "a", "plain", true, "r/pinned@sha256:abc")
+	got, err := (&source.Kube{Client: fakeClient(dep, none), FloatingTags: []string{"latest"}}).Resources(context.Background())
+	if err != nil || len(got) != 2 {
+		t.Fatalf("%+v %v", got, err)
+	}
+	by := map[string]trigger.Resource{got[0].Name: got[0], got[1].Name: got[1]}
+	web := by["web"]
+	if !reflect.DeepEqual(web.Images, []string{"r/app:latest"}) { // listed once, though two containers use it
+		t.Fatalf("images = %v", web.Images)
+	}
+	reasons := map[string]string{}
+	for _, s := range web.Skipped {
+		reasons[s.Image] = s.Reason
+	}
+	if reasons["r/side@sha256:abc"] != "pinned by digest" || !strings.Contains(reasons["r/fixed:v1.2.3"], "not floating") {
+		t.Fatalf("skipped = %v", reasons)
+	}
+	// an annotated resource with nothing to track is still listed
+	if p := by["plain"]; len(p.Images) != 0 || len(p.Skipped) != 1 {
+		t.Fatalf("%+v", p)
 	}
 }

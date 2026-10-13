@@ -32,36 +32,54 @@ import (
 const usage = `usage: pinner <command> [flags]
 
 commands:
+  collect   list the annotated resources and the images they use (the base of pull and trigger)
   pull      stage 1: pull into the local cache (node image stores) what changed on the remote registry
   trigger   stage 2: find resources running a different image than the local cache, and run their action
 `
 
-// common holds the flags shared by every command.
-type common struct {
+// selection holds the flags that say which resources and images are looked at. Every command
+// starts from the same collection (see `pinner collect`).
+type selection struct {
 	kubeconfig *string
 	namespace  *string
 	annotation *string
 	floating   *string
-	localKind  *string
-	daemon     *bool
-	interval   *time.Duration
-	dryRun     *bool
-	logLevel   *string
-	logStates  *string
 }
 
-func registerCommon(fs *flag.FlagSet, dryRunHelp string) *common {
-	return &common{
+func registerSelection(fs *flag.FlagSet) *selection {
+	return &selection{
 		kubeconfig: fs.String("kubeconfig", "", "path to kubeconfig (default: in-cluster, then ~/.kube/config)"),
 		namespace:  fs.String("namespace", "", "namespace to watch (default: all)"),
 		annotation: fs.String("annotation", source.DefaultAnnotation, "annotation that marks target resources"),
 		floating:   fs.String("floating-tags", "latest", "comma-separated tags to track; images with other tags are ignored (empty = all tags)"),
-		localKind:  fs.String("local", "node", "local cache: node (container runtime image store of the nodes)"),
-		daemon:     fs.Bool("daemon", false, "keep running: repeat every --interval until stopped (default: run once and exit)"),
-		interval:   fs.Duration("interval", 5*time.Minute, "with --daemon: time between passes"),
-		dryRun:     fs.Bool("dry-run", false, dryRunHelp),
-		logLevel:   fs.String("log-level", "info", "log level threshold: debug|info|warn|error (match, not-running = info; mismatch, not-pulled = warn; error = error)"),
-		logStates:  fs.String("log-states", "", "comma-separated states to log (default: all): match, mismatch, not-pulled, error; trigger also not-running"),
+	}
+}
+
+// kube is the collection: the annotated resources and their images.
+func (s *selection) kube(client dynamic.Interface) *source.Kube {
+	return &source.Kube{Client: client, Namespace: *s.namespace, Annotation: *s.annotation, FloatingTags: splitList(*s.floating)}
+}
+
+// common holds the flags shared by pull and trigger.
+type common struct {
+	*selection
+	localKind *string
+	daemon    *bool
+	interval  *time.Duration
+	dryRun    *bool
+	logLevel  *string
+	logStates *string
+}
+
+func registerCommon(fs *flag.FlagSet, dryRunHelp string) *common {
+	return &common{
+		selection: registerSelection(fs),
+		localKind: fs.String("local", "node", "local cache: node (container runtime image store of the nodes)"),
+		daemon:    fs.Bool("daemon", false, "keep running: repeat every --interval until stopped (default: run once and exit)"),
+		interval:  fs.Duration("interval", 5*time.Minute, "with --daemon: time between passes"),
+		dryRun:    fs.Bool("dry-run", false, dryRunHelp),
+		logLevel:  fs.String("log-level", "info", "log level threshold: debug|info|warn|error (match, not-running = info; mismatch, not-pulled = warn; error = error)"),
+		logStates: fs.String("log-states", "", "comma-separated states to log (default: all): match, mismatch, not-pulled, error; trigger also not-running"),
 	}
 }
 
@@ -72,6 +90,9 @@ func main() {
 	}
 	var j job
 	switch os.Args[1] {
+	case "collect":
+		runCollect(os.Args[2:])
+		return
 	case "pull":
 		j = setupPull(os.Args[2:])
 	case "trigger":
@@ -126,7 +147,7 @@ func setupPull(args []string) job {
 	}
 	client := newClient(*c.kubeconfig)
 	col := &collector.Collector{
-		Source:   &source.Kube{Client: client, Namespace: *c.namespace, Annotation: *c.annotation, FloatingTags: splitList(*c.floating)},
+		Source:   c.kube(client),
 		Registry: registry.Remote{},
 		Local:    newLocal(*c.localKind, &local.Node{Client: client, PullNamespace: *pullNS, PullSecret: *pullSecret, PullTimeout: *pullTimeout}),
 		OnNew:    policy,
@@ -144,7 +165,7 @@ func setupTrigger(args []string) job {
 
 	client := newClient(*c.kubeconfig)
 	det := &trigger.Detector{
-		Source:  &source.Kube{Client: client, Namespace: *c.namespace, Annotation: *c.annotation, FloatingTags: splitList(*c.floating)},
+		Source:  c.kube(client),
 		Local:   newLocal(*c.localKind, &local.Node{Client: client}),
 		Running: &source.KubeRunning{Client: client},
 	}

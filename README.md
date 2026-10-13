@@ -99,9 +99,14 @@ digest を別に記録することはしない（正本はリモートのレジ�
 
 | コマンド | 内容 | 状態 |
 | --- | --- | --- |
+| `pinner collect` | annotation の付いたリソースと、使っているイメージを集めて表示する。**`pull` と `trigger` の土台**（読み取りのみ） | 実装済み |
 | `pinner pull` | 第一段階: リモートで変わったイメージを、ローカルキャッシュに pull する | 実装済み |
 | `pinner trigger` | 第二段階: ローカルを正に、実行中のものがローカルと違えば、指定のアクションを引き起こす（結果はアクション次第で、保証しない） | 検知と `none` のみ実装済み |
 | `pinner sync` | `pull` → `trigger` を続けて行う | 未実装 |
+
+`pull` と `trigger` は、どちらも、`collect` と同じ収集から始まる（annotation の付いたリソースと、そのイメージ）。
+そのため、`--kubeconfig`、`--namespace`、`--annotation`、`--floating-tags` は、3 つのコマンドで共通で、`collect` で見えたものが、`pull` と `trigger` の対象になる。
+「なぜ、このイメージが対象にならないのか」は、まず `collect` で確かめる。
 
 どのコマンドも、既定は 1 回実行して終了。`--daemon`（と `--interval`）で常駐して繰り返す。
 第二段階はアクション（将来は Pod の削除など）の実行を伴うので、`pull` だけでは動かない。第二段階まで行うときは、`trigger` か `sync` を明示する。
@@ -141,6 +146,27 @@ digest を別に記録することはしない（正本はリモートのレジ�
   失敗や、効かなかったときに消極的にする戦略（`backoff` など）と、永続化は、これから（[docs/design.md](./docs/design.md)）。
   ローカルの digest が変われば、新しい状態として、また依頼する。`--dry-run` の実行は、数えない。
 - `trigger --max-actions N` は、1 回の実行で依頼するアクションの数を N 件までにする（既定 0 = 上限なし）。間違えたときの影響を小さくする。
+
+### collect（収集して表示する）
+
+```sh
+./pinner collect                       # 表
+./pinner collect -o json               # JSON（スクリプト向け）
+./pinner collect --namespace tutorial --floating-tags=latest,dev
+```
+
+```
+RESOURCE                                   IMAGE                                    TRACKED                                       ON-MISMATCH  ON-NOT-PULLED  ON-ERROR
+tutorial/Deployment/web                    ghcr.io/sasano8/app-authorization-demo:latest  yes                                     rollout      -              -
+tutorial/Deployment/web                    ghcr.io/o/fixed:v1.2.3                   no: tag is not floating (see --floating-tags)  rollout      -              -
+tutorial/Deployment/web                    ghcr.io/o/side@sha256:abc…               no: pinned by digest                           rollout      -              -
+app-authorization-demo/Service/app-authorization-demo  ghcr.io/sasano8/app-authorization-demo:latest  yes                       -            -              -
+```
+
+- 1 行が、（リソース、イメージ）。`TRACKED` が `yes` のものが、`pull` と `trigger` の対象。`no: …` は、対象にならない理由。
+- `ON-MISMATCH` などは、リソースの annotation に書かれたアクション（`-` は未指定 = 既定の `none`）。
+- annotation `floatingtag-pinner/enabled: "true"` が付いたリソースだけが出る。付いていても、追うイメージが無ければ、すべて `no: …` で出る。
+- 何も変更しない。リモートのレジストリにも、ノードにも触れない（クラスタの読み取りだけ）。権限は、対象リソースの `list`。
 
 ### ログ
 
@@ -245,7 +271,7 @@ level=INFO msg="trigger not-running" resource=tutorial/DaemonSet/agent image=ghc
 ```
 cmd/pinner/          エントリポイント（段階ごとのコマンド。既定は1回実行、--daemon で常駐）
 internal/collector/  収集と比較のロジック（実行形態に依存しない。Source / Registry / Local の interface）
-internal/source/     Kubernetes リソースからイメージを集める
+internal/source/     収集: annotation の付いたリソースと、そのイメージを集める（`pinner collect`）。`pull` と `trigger` の土台
 internal/registry/   リモートレジストリの digest 取得（go-containerregistry）
 internal/local/      ローカルキャッシュ（ノードのイメージストアを読む実装）
 ```

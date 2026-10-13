@@ -178,6 +178,23 @@ cmd/pinner  ──▶  internal/collector（収集と比較のロジック）
   1 回実行では、どれか 1 つでも失敗があれば終了コードは非 0。
 - リモートの digest は `remote.Head` で取る（イメージ本体は落とさない）。
 
+## 収集（`collect`）: pull と trigger の土台
+
+`pull` も `trigger` も、まず「どのリソースの、どのイメージを対象にするか」を決める。その部分を、コマンド `pinner collect` として、
+単独で見られるようにした（読み取りのみ。`internal/source` の `Kube.Resources`）。
+
+```
+collect ──▶ pull    （対象のイメージを、リモートとローカルで比べて、pull する）
+        └─▶ trigger （対象のリソースを、ローカルと実行中で比べて、アクションを依頼する）
+```
+
+- 対象の選び方（`--annotation`、`--floating-tags`、`--namespace`）は、3 つのコマンドで共通。`collect` で見えたものが、`pull` と `trigger` の対象になる。
+  フラグも、コード（`selection`）も共通。「なぜ、このイメージが対象にならないのか」は、`collect` で理由まで見られる。
+- 対象外のイメージは、理由と一緒に持つ（`Resource.Skipped`）: digest 指定（`pinned by digest`）、フローティングタグでない（`tag is not floating`）。
+  対象のイメージが 1 つもなくても、annotation が付いていれば、リソースは一覧に出る（`pull` と `trigger` は、対象のイメージだけを見る）。
+- 出力は、ログではなくデータなので、標準出力に出す（表、または `-o json`）。ログ（`--log-level`、`--log-states`）の対象ではない。
+- 実装の順序は逆になったが、本来は、最初に作るべき部分だった。
+
 ## 8. 第二段階の設計 [検知、`none`、`rollout`、`delete-pods` は実装済み。`sync` は未実装]
 
 ### 比較

@@ -162,6 +162,7 @@ CI は、あわせて `ghcr.io/sasano8/kube-floatingtag-pinner`（amd64 / arm64 
 ### 動作確認（インストールできたか）
 
 ```sh
+pinner version              # どのビルドか（コミットと Go のバージョン）。修正前のバイナリを使っていないかの確認にも使う
 pinner collect --help       # フラグの一覧が出る
 pinner collect              # kubeconfig のクラスタで、annotation の付いたリソースを一覧する（読み取りのみ。何も無ければ、表の見出しだけ）
 ```
@@ -327,6 +328,15 @@ app-authorization-demo/Service/app-authorization-demo  ghcr.io/sasano8/app-autho
 | `--log-states` | ログに出す状態（カンマ区切り。例: `mismatch,not-pulled,error`）。そのコマンドが出さない状態を指定するとエラー | すべて |
 
 ログの digest は、先頭の 12 文字と `...` に省略して出す（`sha256:bf16c8e06762...`）。`--digest-length N` で文字数を変えられる（`0` で全部）。
+
+**うまくいかないときは `--debug`**（`--log-level=debug` と同じ）を付ける。通常のログに加えて、次が出る。
+
+- `pull start` / `trigger start`: どのビルド（`version`）で、どの引数で動いているか。
+- `pull: node finished`: ノードごとの pull 用 Pod の結果（Pod の名前、イメージ、`imagePullPolicy`、かかった時間、報告された digest、`containerStatuses` の中身）。
+- `local: node tag digests`: ノードごとの、タグが指す digest（`Node.status.images` から読んだもの）。
+- `running: pod` / `running: revision`: 動いている Pod や Revision が報告した `image`、`imageID`（`imageDigest`）と、そこから取り出した digest。
+
+不具合の報告には、`pinner version` の出力と、`--debug` のログを付けてもらえると、原因を絞りやすい。
 
 `--daemon` で `match` が毎回出てうるさいときは、`--log-level=warn` か `--log-states=mismatch,not-pulled,error` で絞れる。
 

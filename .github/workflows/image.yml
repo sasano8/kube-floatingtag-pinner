@@ -44,6 +44,7 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
+          build-args: COMMIT=${{ github.sha }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
@@ -69,7 +70,7 @@ jobs:
             os=${target%/*}; arch=${target#*/}
             ext=""; [ "$os" = windows ] && ext=".exe"
             out="pinner_${os}_${arch}"
-            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags="-s -w" -o "dist/pinner${ext}" ./cmd/pinner
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags="-s -w -X main.commit=${GITHUB_SHA}" -o "dist/pinner${ext}" ./cmd/pinner
             if [ "$os" = windows ]; then
               (cd dist && zip -q "${out}.zip" "pinner${ext}")
             else

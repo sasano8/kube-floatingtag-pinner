@@ -12,6 +12,7 @@ nav:
       - collect: cli/collect.md
       - pull: cli/pull.md
       - trigger: cli/trigger.md
+      - version: cli/version.md
   - 設計: design.md
   - 調査: research.md
 markdown_extensions:

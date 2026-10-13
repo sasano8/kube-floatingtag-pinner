@@ -3,6 +3,7 @@ package source
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/google/go-containerregistry/pkg/name"
@@ -56,7 +57,9 @@ func (k *KubeRunning) pods(ctx context.Context, r trigger.Resource, want string)
 			if n, err := normalize(img); err != nil || n != want {
 				continue
 			}
-			if d := digestOf(m["imageID"]); d != "" {
+			d := digestOf(m["imageID"])
+			slog.Debug("running: pod", "pod", pod.GetName(), "node", node, "image", img, "imageID", m["imageID"], "digest", d)
+			if d != "" {
 				out = append(out, trigger.Running{Digest: d, Node: node, Pod: pod.GetName(), UID: string(pod.GetUID())})
 			}
 		}
@@ -99,7 +102,9 @@ func (k *KubeRunning) revision(ctx context.Context, r trigger.Resource, want str
 		if n, err := normalize(img); err != nil || n != want {
 			continue
 		}
-		if d := digestOf(m["imageDigest"]); d != "" {
+		d := digestOf(m["imageDigest"])
+		slog.Debug("running: revision", "revision", r.Revision, "image", img, "imageDigest", m["imageDigest"], "digest", d)
+		if d != "" {
 			out = append(out, trigger.Running{Digest: d})
 		}
 	}

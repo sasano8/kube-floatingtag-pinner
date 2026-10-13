@@ -62,6 +62,14 @@ pull のあとにローカルを読み直し、状態の変化（` + "`mismatch`
 			run:      runTrigger,
 		},
 		{
+			name:    "version",
+			summary: "print which build this is (commit and Go version)",
+			description: `どのビルドの ` + "`pinner`" + ` かを表示する（コミット、Go のバージョン）。不具合を報告するときや、
+「修正前のバイナリを使っていないか」を確かめるときに使う。` + "`--version`" + ` でも同じ。`,
+			register: func(fs *flag.FlagSet) {},
+			run:      runVersion,
+		},
+		{
 			name:     "docs",
 			summary:  "write the command-line documentation (docs/cli) from the flag definitions",
 			register: func(fs *flag.FlagSet) {},

@@ -62,6 +62,7 @@ type common struct {
 	logLevel  *string
 	logStates *string
 	digestLen *int
+	debug     *bool
 }
 
 func registerCommon(fs *flag.FlagSet, dryRunHelp string) *common {
@@ -72,6 +73,7 @@ func registerCommon(fs *flag.FlagSet, dryRunHelp string) *common {
 		interval:  fs.Duration("interval", 5*time.Minute, "with --daemon: time between passes"),
 		dryRun:    fs.Bool("dry-run", false, dryRunHelp),
 		logLevel:  fs.String("log-level", "info", "log level threshold: debug|info|warn|error (match, not-running = info; mismatch, not-pulled = warn; error = error)"),
+		debug:     fs.Bool("debug", false, "shorthand for --log-level=debug: also log how each node pulled, and what the nodes and the Pods report"),
 		digestLen: fs.Int("digest-length", report.DefaultDigestLength, "hex characters of a sha256 digest to show in the log, then \"...\" (0 = the whole digest)"),
 		logStates: fs.String("log-states", "", "comma-separated states to log (default: all): match, mismatch, not-pulled, error; trigger also not-running"),
 	}
@@ -81,6 +83,10 @@ func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage())
 		os.Exit(2)
+	}
+	if os.Args[1] == "--version" || os.Args[1] == "-version" {
+		runVersion(nil)
+		return
 	}
 	for _, c := range commands {
 		if c.name == os.Args[1] {
@@ -206,10 +212,14 @@ func setupLogging(c *common, stage string, allowed ...report.State) report.Repor
 	if err != nil {
 		fatal(err)
 	}
+	if *c.debug {
+		level = slog.LevelDebug
+	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level:       level,
 		ReplaceAttr: report.ShortenDigests(*c.digestLen),
 	})))
+	slog.Debug(stage+" start", "version", version(), "args", strings.Join(os.Args[1:], " "))
 	states, err := report.ParseStates(*c.logStates, allowed...)
 	if err != nil {
 		fatal(err)

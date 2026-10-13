@@ -91,15 +91,54 @@ flowchart TB
 digest を別に記録することはしない（正本はリモートのレジストリ、状態はローカルキャッシュ自身が持つ）。
 実行中の Pod との突き合わせと再デプロイは、第二段階で行う。
 
-## 使い方（最小実装）
+## 使い方
+
+コマンドは段階ごとに分ける（段階ごとにリスクと必要な権限が違い、動かす間隔も別にできるため）。
+
+| コマンド | 内容 | 状態 |
+| --- | --- | --- |
+| `pinner sync` | 第一段階: リモートを正に、ローカルキャッシュを同期する | 実装済み |
+| `pinner redeploy` | 第二段階: ローカルを正に、実行中のものが古ければ再デプロイする | 未実装 |
+| `pinner run` | 第一段階 → 第二段階を続けて行う | 未実装 |
+
+どのコマンドも、既定は 1 回実行して終了。`--daemon`（と `--interval`）で常駐して繰り返す。
+第二段階は再デプロイ（Pod の削除など）を伴うので、第一段階の `sync` だけでは動かない。第二段階まで行うときは、`redeploy` か `run` を明示する。
+
+### 実行例
 
 ```sh
-# 対象にしたいリソースに annotation を付ける
+# 0. 対象にしたいリソースに annotation を付ける（Knative Service の場合は ksvc に）
 kubectl annotate deployment/myapp floatingtag-pinner/enabled=true
 
-go run ./cmd/pinner                          # 1回だけ実行して終了（既定）
-go run ./cmd/pinner --daemon --interval 5m   # 常駐して繰り返す
+# 1. 第一段階だけ、1回実行する（手元から。kubeconfig の権限で動く）
+go run ./cmd/pinner sync --kubeconfig ~/.kube/config
+
+# 2. 初見のイメージは pull せず、差分のあるものだけ同期する
+go run ./cmd/pinner sync --on-new=ignore
+
+# 3. 追うタグを増やす / 名前空間を絞る / 非公開レジストリ用の Secret を使う
+go run ./cmd/pinner sync --floating-tags=latest,dev --namespace=tutorial --pull-secret=ghcr-pull
+
+# 4. 常駐して、5分ごとに繰り返す
+go run ./cmd/pinner sync --daemon --interval 5m
+
+# 5. 第二段階（未実装・予定）
+go run ./cmd/pinner redeploy      # 第二段階だけ
+go run ./cmd/pinner run --daemon  # 第一段階 → 第二段階を、続けて繰り返す
 ```
+
+出力は、イメージごとに 1 行のログ（次は形式の例。実クラスタで取った出力ではない）。
+
+```
+level=INFO msg=unchanged image=ghcr.io/sasano8/app-authorization-demo:latest owners=[tutorial/Deployment/web] remote=sha256:bf16c8e0… local=[sha256:bf16c8e0…]
+level=WARN msg=changed   image=ghcr.io/sasano8/app-authorization-demo:latest owners=[app-authorization-demo/Service/app-authorization-demo] remote=sha256:bf16c8e0… local=[sha256:4a45bcf8…] pulled=true
+level=WARN msg=new       image=docker.io/library/nginx:latest owners=[tutorial/Deployment/proxy] remote=sha256:… local=[] pulled=true
+```
+
+- `unchanged`: ローカルのタグがリモートと同じ digest を指している。
+- `changed`: ローカルのタグが別の digest を指していた（古い）。リモートの内容で同期した（`pulled=true`）。
+- `new`: ローカルがそのタグを持っていなかった。`--on-new=register`（既定）なら pull する。`ignore` なら `ignored` と出して何もしない。
+- 1 つでも失敗（認証、タイムアウトなど）があると、終了コードは非 0。
 
 | フラグ | 既定値 | 説明 |
 | --- | --- | --- |
@@ -130,7 +169,7 @@ go run ./cmd/pinner --daemon --interval 5m   # 常駐して繰り返す
 ### 構成
 
 ```
-cmd/pinner/          エントリポイント（既定は1回実行、--daemon で常駐）
+cmd/pinner/          エントリポイント（段階ごとのコマンド。既定は1回実行、--daemon で常駐）
 internal/collector/  収集と比較のロジック（実行形態に依存しない。Source / Registry / Local の interface）
 internal/source/     Kubernetes リソースからイメージを集める
 internal/registry/   リモートレジストリの digest 取得（go-containerregistry）

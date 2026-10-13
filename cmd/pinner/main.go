@@ -24,8 +24,18 @@ import (
 	"github.com/sasano8/kube-floatingtag-pinner/internal/source"
 )
 
+const usage = `usage: pinner <command> [flags]
+
+commands:
+  sync   stage 1: sync the local cache (node image stores) with the remote registry
+`
+
 func main() {
-	fs := flag.NewFlagSet("pinner", flag.ExitOnError)
+	if len(os.Args) < 2 || os.Args[1] != "sync" {
+		fmt.Fprint(os.Stderr, usage)
+		os.Exit(2)
+	}
+	fs := flag.NewFlagSet("pinner sync", flag.ExitOnError)
 	daemon := fs.Bool("daemon", false, "keep running: collect every --interval until stopped (default: collect once and exit)")
 	kubeconfig := fs.String("kubeconfig", "", "path to kubeconfig (default: in-cluster, then ~/.kube/config)")
 	namespace := fs.String("namespace", "", "namespace to watch (default: all)")
@@ -37,7 +47,7 @@ func main() {
 	pullSecret := fs.String("pull-secret", "", "imagePullSecret name (in --pull-namespace) for private registries")
 	pullTimeout := fs.Duration("pull-timeout", 2*time.Minute, "per-node timeout for a pull")
 	interval := fs.Duration("interval", 5*time.Minute, "with --daemon: time between passes")
-	fs.Parse(os.Args[1:])
+	fs.Parse(os.Args[2:])
 
 	policy, err := collector.ParseOnNew(*onNew)
 	if err != nil {

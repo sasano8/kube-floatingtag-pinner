@@ -6,6 +6,9 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"time"
+
+	"github.com/sasano8/kube-floatingtag-pinner/internal/state"
 )
 
 // DefaultAction is used when a resource names no action for a state: nothing is done.
@@ -45,16 +48,21 @@ type Actor struct {
 	// MaxActions caps the actions requested per pass (0 = no cap), to limit the damage of a mistake.
 	MaxActions int
 
-	requested map[string]bool // already asked for this local state: not asked again
-	count     int
+	// Store remembers what was asked for, and how it went (see internal/state for the strategies it is
+	// meant to carry). NewActor gives an in-memory one: forgotten when the process ends.
+	Store state.Store
+	// Now is the clock for the Records (default time.Now).
+	Now func() time.Time
+
+	count int
 }
 
 // BeginPass starts a new pass: the per-pass cap counts from zero.
-// What was already requested is remembered across passes (for the life of the process).
+// What was already requested is remembered across passes, in the Store.
 func (a *Actor) BeginPass() { a.count = 0 }
 
 func NewActor(actions ...Action) *Actor {
-	a := &Actor{actions: map[string]Action{}}
+	a := &Actor{actions: map[string]Action{}, Store: state.NewMemory()}
 	for _, ac := range actions {
 		a.actions[ac.Name()] = ac
 	}
@@ -76,13 +84,19 @@ func (a *Actor) Act(ctx context.Context, f Finding) error {
 	if sa, ok := ac.(StateAware); ok && !containsStatus(sa.States(), f.Status) {
 		return fmt.Errorf("%s: action %q cannot be bound to %s", f.Resource, name, f.Status)
 	}
+	key := state.Key{Resource: f.Resource.String(), Image: f.Image, State: string(f.Status), Action: name}
+	local := strings.Join(f.Local, ",")
 	if name != DefaultAction {
-		// The same action for the same local state is asked for once. After a rollout the resource may
-		// still differ for a while (or for good); asking again every pass would roll it out forever.
-		key := fmt.Sprintf("%s|%s|%s|%s|%v", f.Resource, f.Image, f.Status, name, f.Local)
-		if a.requested[key] {
+		// The rule today is "once per local state": the same action for the same local digest is asked for
+		// once. After a rollout the resource may still differ for a while (or for good); asking again every
+		// pass would roll it out forever. The other strategies (cooldown, backoff, circuit breaker) are
+		// described in internal/state, and would be decided here from the same Record.
+		if rec, ok := a.Store.Get(key); ok && rec.Local == local {
+			// Seen again in the same local state after asking: the action had no effect (yet).
+			rec.StillDifferent++
+			a.Store.Put(key, rec)
 			slog.Debug("trigger action skipped: already requested for this local state",
-				"resource", f.Resource.String(), "image", f.Image, "action", name)
+				"resource", f.Resource.String(), "image", f.Image, "action", name, "still_different", rec.StillDifferent)
 			return nil
 		}
 		if a.MaxActions > 0 && a.count >= a.MaxActions {
@@ -91,10 +105,13 @@ func (a *Actor) Act(ctx context.Context, f Finding) error {
 			return nil
 		}
 		if !a.DryRun {
-			if a.requested == nil {
-				a.requested = map[string]bool{}
+			// Remembered before asking, so a failing action is not retried every pass either.
+			now := time.Now
+			if a.Now != nil {
+				now = a.Now
 			}
-			a.requested[key] = true
+			prev, _ := a.Store.Get(key)
+			a.Store.Put(key, state.Record{Local: local, RequestedAt: now(), Failures: prev.Failures})
 			a.count++
 		}
 	}
@@ -104,7 +121,18 @@ func (a *Actor) Act(ctx context.Context, f Finding) error {
 		return nil
 	}
 	if err := ac.Do(ctx, f); err != nil {
+		if name != DefaultAction {
+			rec, _ := a.Store.Get(key)
+			rec.Failures++
+			rec.LastError = err.Error()
+			a.Store.Put(key, rec)
+		}
 		return err
+	}
+	if name != DefaultAction {
+		rec, _ := a.Store.Get(key)
+		rec.Failures, rec.LastError = 0, ""
+		a.Store.Put(key, rec)
 	}
 	if name != DefaultAction {
 		// Fire and forget: what the action causes is up to Kubernetes, and is not followed.

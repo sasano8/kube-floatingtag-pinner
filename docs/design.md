@@ -125,6 +125,18 @@ kubelet に pull させるため、Ready な各ノードに、そのノード固
 - **`nodeName` 固定**: スケジューラを通さず、確実にそのノードで pull させる（Ready でないノードは除く）。
 - **Pod 名**に、タグ参照・digest・ノード名のハッシュを使う。digest が変わるたびに別の Pod になり、前回の残りと衝突しない。
 
+### なぜ `imagePullPolicy: Always` か（実機で見つかった不具合）
+
+pull 用 Pod は、`Always` にしている。最初は `IfNotPresent` にしていたが、**ノードに、そのタグがすでにあって、古い digest を指しているとき**
+（= `mismatch` のとき）に、何も pull されなかった。`IfNotPresent` は、タグの名前がノードにあれば「ある」と判断して、レジストリに問い合わせない。
+そのため、pull 用 Pod は、古いイメージのまま起動して、古い digest（`imageID`）を報告した。リモートが `07e709f6…` に動いたのに、
+pull のあとも `local=[bf16c8e0…]` のままで、`pull mismatch` が繰り返された。
+ノードにタグが無いとき（`not-pulled`）は、`IfNotPresent` でも pull されるので、最初の確認では見つからなかった。
+`Always` は、毎回レジストリに問い合わせ（イメージ本体は、digest が違うときだけ取る）、違えば pull して、ノードのタグを付け替える。
+
+pull のあとの状態を、pull 用 Pod が報告した digest から求める方式（下）は、この不具合でも役に立った: `outcome=pulled` と言いながら、
+続く `via=pulling` の行が `mismatch` のままで、「pull したが、揃っていない」と正しく出た。
+
 ### なぜタグ指定で pull するか
 
 ワークロードと同じ `repo:latest` で pull する。digest 指定（`repo@sha256:…`）で pull すると、イメージ本体はノードに入るが、

@@ -95,8 +95,12 @@ func TestPull(t *testing.T) {
 	})
 
 	n := &local.Node{Client: client, PullNamespace: "pull", PullTimeout: 5 * time.Second}
-	if err := n.Pull(context.Background(), "ghcr.io/o/app:latest", "sha256:bbb"); err != nil {
+	pulled, err := n.Pull(context.Background(), "ghcr.io/o/app:latest", "sha256:bbb")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(pulled, []string{"sha256:bbb"}) { // what the pull Pods' imageID reported: one value for both nodes
+		t.Fatalf("pulled = %v", pulled)
 	}
 	sort.Strings(created)
 	if !reflect.DeepEqual(created, []string{"n1", "n2"}) {
@@ -123,7 +127,7 @@ func TestPullReportsImagePullError(t *testing.T) {
 		return false, nil, nil
 	})
 	n := &local.Node{Client: client, PullTimeout: 5 * time.Second}
-	err := n.Pull(context.Background(), "ghcr.io/o/app:latest", "sha256:bbb")
+	_, err := n.Pull(context.Background(), "ghcr.io/o/app:latest", "sha256:bbb")
 	if err == nil || !strings.Contains(err.Error(), "ErrImagePull") {
 		t.Fatalf("err = %v", err)
 	}

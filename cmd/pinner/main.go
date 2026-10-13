@@ -259,12 +259,7 @@ func pullPass(ctx context.Context, c *collector.Collector, rep report.Reporter) 
 			rep.Emit(ctx, report.State(r.Status), attrs...)
 			if r.Pulled {
 				after := []any{"image", r.Image, "owners", r.Owners, "remote", r.Remote, "local", r.AfterLocal, "via", "pulling"}
-				if r.AfterErr != nil {
-					ok = false
-					rep.Emit(ctx, report.Error, append(after, "err", r.AfterErr)...)
-				} else {
-					rep.Emit(ctx, report.State(r.After), after...)
-				}
+				rep.Emit(ctx, report.State(r.After), after...)
 			}
 		}
 	}

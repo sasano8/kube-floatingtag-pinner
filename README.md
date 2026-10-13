@@ -198,7 +198,8 @@ pinner collect              # kubeconfig のクラスタで、annotation の付�
    pinner pull --namespace app-authorization-demo
    ```
 
-   `pull mismatch`（`outcome=pulled`）に続けて `pull match`（`via=pulling`）と出れば、ノードのタグが、リモートの digest になった。
+   `pull not-pulled`（または `pull mismatch`、`outcome=pulled`）に続けて `pull match`（`via=pulling`）と出れば、ノードが、リモートの digest を pull できた
+   （pull 用 Pod が報告した digest が、リモートと同じ）。
 
 5. **ノードで確かめる。**
 
@@ -209,6 +210,7 @@ pinner collect              # kubeconfig のクラスタで、annotation の付�
    ```
 
    `repo:latest` と同じエントリに、リモートの digest（`repo@sha256:…`）が載っていれば成功。もう一度 `pinner pull` を実行すると、`pull match` だけになる。
+   **ノードの一覧への反映は、数分遅れることがある**（kubelet がイメージの一覧を更新するのが遅い）。載っていなければ、数分待って、もう一度確かめる。
 
 6. **動いているものがローカルと違うかを調べる**（何も変更しない）。
 
@@ -331,9 +333,13 @@ app-authorization-demo/Service/app-authorization-demo  ghcr.io/sasano8/app-autho
 
 状態の扱いは、段階で違う。
 
-- **第一段階（`pull`）: 状態が変化する。** `pull` は pull を自分で行い、そのあとローカルのタグを読み直して確かめる。
-  最初の状態と、pull したあとの状態を、続けて出す（`via=pulling`）。pull のあとも `mismatch` のままなら、そう出る
-  （pull の間にタグがさらに進んだ、など）。ノードの状態の更新は遅れるので、読み直しは最大 30 秒、数秒おきに繰り返す。
+- **第一段階（`pull`）: 状態が変化する。** `pull` は pull を自分で行う。最初の状態と、pull したあとの状態を、続けて出す（`via=pulling`）。
+  pull したあとの状態は、**pull 用 Pod が報告した digest**（`imageID`）で決める。報告された digest がリモートと同じなら `match`、
+  違えば `mismatch`（pull の間にタグがさらに進んだ、など）、何も報告されなければ `not-pulled`。
+  ノードの `Node.status.images` を読み直して確かめることはしない。kubelet が、この一覧を更新するのが遅い（数分。未確認）ため、
+  読み直すと、うまくいった pull を、失敗と判断してしまう。
+  **この遅れの影響**: ローカルの状態は `Node.status.images` から読むので、pull の直後（数分以内）に、`pull` や `trigger` をもう一度実行すると、
+  まだ `not-pulled` / `mismatch` と出ることがある。しばらく待てば、`match` になる。
 - **第二段階（`trigger`）: 投げっぱなし。** 最初の状態を報告し、アクションを依頼する（`trigger action requested`）だけで、
   そのあと何が起きるかは Kubernetes の pull の仕組みに任せ、確かめない。結果は、次の実行で、新しい「最初の状態」として分かる。
 
@@ -354,7 +360,7 @@ level=WARN msg="pull mismatch" image=ghcr.io/sasano8/app-authorization-demo:late
 
 | `outcome` | 意味 |
 | --- | --- |
-| `pulled` | pull した（このあと、読み直した状態が続けて出る） |
+| `pulled` | pull した（このあと、pull 用 Pod が報告した digest から求めた状態が続けて出る） |
 | `would-pull` | `--dry-run` のため、pull が必要だったことだけを報告した |
 | `ignored` | `not-pulled` で、`--on-new=ignore` のため、何もしなかった |
 | `pull-failed` | pull に失敗した（`error` として報告され、終了コードは非 0） |

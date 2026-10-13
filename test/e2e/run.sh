@@ -37,6 +37,18 @@ run_pinner() {
 expect() { grep -Eq "$1" "$LOG" || fail "expected a line matching: $1"; }
 expect_not() { ! grep -Eq "$1" "$LOG" || fail "unexpected line matching: $1"; }
 
+# wait_local_matches: the kubelet refreshes Node.status.images only every few minutes, so what pull and trigger
+# read as "the local state" can be behind what was just pulled. Wait until pull sees the tag as matching.
+wait_local_matches() {
+  local deadline=$((SECONDS + 420))
+  while :; do
+    run_pinner pull --dry-run >/dev/null 2>&1 || true
+    grep -q 'msg="pull match"' "$LOG" && return 0
+    [ "$SECONDS" -lt "$deadline" ] || fail "Node.status.images did not show the pulled image within 7 minutes"
+    sleep 10
+  done
+}
+
 # push_image <label>: builds a tiny image whose content depends on <label>, and pushes it as :latest
 push_image() {
   local dir="${WORK}/img-$1"
@@ -82,6 +94,9 @@ step "collect: the annotated Deployment and its tracked image are listed"
 run_pinner collect || fail "collect exited non-zero"
 expect "e2e/Deployment/app +localhost:5001/e2e/app:latest +yes"
 
+step "wait until the nodes report the image the Pod pulled (Node.status.images is refreshed late)"
+wait_local_matches
+
 step "pull: the local tag already follows the remote -> match"
 run_pinner pull || fail "pull exited non-zero"
 expect 'msg="pull match"'
@@ -99,7 +114,10 @@ expect 'msg="pull mismatch".*outcome=would-pull' # still mismatch: nothing was p
 step "pull: mismatch -> match by pulling"
 run_pinner pull || fail "pull exited non-zero"
 expect 'msg="pull mismatch".*outcome=pulled'
-expect 'msg="pull match".*via=pulling'
+expect 'msg="pull match".*via=pulling'   # from what the pull Pods reported, not from Node.status.images
+
+step "wait until the nodes report the pulled image"
+wait_local_matches
 
 step "pull again: nothing to do"
 run_pinner pull || fail "pull exited non-zero"
@@ -139,6 +157,7 @@ step "the remote's tag moves again (v3); pull it"
 push_image v3
 run_pinner pull || fail "pull exited non-zero"
 expect 'msg="pull match".*via=pulling'
+wait_local_matches
 
 step "trigger --dry-run with on-mismatch=delete-pods: says what it would do, deletes nothing"
 kubectl -n "$NS" annotate --overwrite deployment app floatingtag-pinner/on-mismatch=delete-pods

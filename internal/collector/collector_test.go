@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/sasano8/kube-floatingtag-pinner/internal/collector"
 )
@@ -24,23 +23,25 @@ func (f fakeRegistry) Digest(_ context.Context, image string) (string, error) {
 }
 
 type fakeLocal struct {
-	// stuck: the pull succeeds but the local tag does not move (the tag moved again, kubelet lag, ...)
-	stuck     bool
+	// pulledAs: what the pull reports, if it is not the digest asked for (the tag moved again meanwhile)
+	pulledAs  string
 	have      []string
 	pullErr   error
 	pulledDig []string
 }
 
 func (f *fakeLocal) TagDigests(context.Context, string) ([]string, error) { return f.have, nil }
-func (f *fakeLocal) Pull(_ context.Context, _, digest string) error {
+func (f *fakeLocal) Pull(_ context.Context, _, digest string) ([]string, error) {
 	if f.pullErr != nil {
-		return f.pullErr
+		return nil, f.pullErr
 	}
 	f.pulledDig = append(f.pulledDig, digest)
-	if !f.stuck {
-		f.have = []string{digest} // the tag now points to what was pulled
+	got := digest
+	if f.pulledAs != "" {
+		got = f.pulledAs
 	}
-	return nil
+	f.have = []string{got} // the tag now points to what was pulled
+	return []string{got}, nil
 }
 
 const img = "example.com/app:latest"
@@ -52,9 +53,6 @@ func run(t *testing.T, loc *fakeLocal, onNew collector.OnNew) collector.Result {
 		Registry: fakeRegistry{img: "sha256:b"},
 		Local:    loc,
 		OnNew:    onNew,
-
-		VerifyTimeout:  20 * time.Millisecond,
-		VerifyInterval: 2 * time.Millisecond,
 	}
 	rs, err := c.CollectOnce(context.Background())
 	if err != nil || len(rs) != 1 {
@@ -128,7 +126,7 @@ func TestDryRunDoesNotPull(t *testing.T) {
 	}
 }
 
-func TestPullIsReadBackAsAChangeOfState(t *testing.T) {
+func TestPullShowsAsAChangeOfState(t *testing.T) {
 	loc := &fakeLocal{have: []string{"sha256:a"}}
 	r := run(t, loc, collector.OnNewRegister)
 	if r.Status != collector.StatusMismatch || !r.Pulled || r.After != collector.StatusMatch ||
@@ -140,19 +138,44 @@ func TestPullIsReadBackAsAChangeOfState(t *testing.T) {
 	}
 }
 
-func TestPullThatDoesNotTakeStaysMismatch(t *testing.T) {
-	loc := &fakeLocal{have: []string{"sha256:a"}, stuck: true}
-	r := run(t, loc, collector.OnNewRegister)
-	if !r.Pulled || r.After != collector.StatusMismatch || r.AfterLocal[0] != "sha256:a" {
-		t.Fatalf("%+v", r)
-	}
-	if r := run(t, &fakeLocal{stuck: true}, collector.OnNewRegister); r.After != collector.StatusNotPulled {
+func TestPullWhoseTagMovedAgainStaysMismatch(t *testing.T) {
+	// the pull reports a digest that is not the one the remote had when it was checked
+	r := run(t, &fakeLocal{have: []string{"sha256:a"}, pulledAs: "sha256:c"}, collector.OnNewRegister)
+	if !r.Pulled || r.After != collector.StatusMismatch || r.AfterLocal[0] != "sha256:c" {
 		t.Fatalf("%+v", r)
 	}
 }
 
-func TestNothingReadBackWithoutAPull(t *testing.T) {
+func TestPullThatReportsNothingIsNotPulled(t *testing.T) {
+	r := run2(t, emptyPull{})
+	if r.After != collector.StatusNotPulled || len(r.AfterLocal) != 0 {
+		t.Fatalf("%+v", r)
+	}
+}
+
+func TestNothingAfterWithoutAPull(t *testing.T) {
 	if r := run(t, &fakeLocal{have: []string{"sha256:b"}}, collector.OnNewRegister); r.After != "" {
 		t.Fatalf("a match pulls nothing: %+v", r)
 	}
+}
+
+// emptyPull pulls "successfully" but reports no digest (e.g. no Ready node).
+type emptyPull struct{}
+
+func (emptyPull) TagDigests(context.Context, string) ([]string, error)   { return nil, nil }
+func (emptyPull) Pull(context.Context, string, string) ([]string, error) { return nil, nil }
+
+func run2(t *testing.T, loc collector.Local) collector.Result {
+	t.Helper()
+	c := &collector.Collector{
+		Source:   fakeSource{{Image: img}},
+		Registry: fakeRegistry{img: "sha256:b"},
+		Local:    loc,
+		OnNew:    collector.OnNewRegister,
+	}
+	rs, err := c.CollectOnce(context.Background())
+	if err != nil || len(rs) != 1 {
+		t.Fatalf("%v %v", rs, err)
+	}
+	return rs[0]
 }

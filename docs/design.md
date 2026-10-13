@@ -238,12 +238,20 @@ Pod から取るのは「タグ」と「digest」の両方。タグはどのロ�
   単体実行でも、`sync`（続けて実行）でも、形式が揃う。接頭辞は、`msg` の先頭に付ける（`stage` の項目にはしない。重複するため）。
   状態でない行（`trigger action requested`、`collect failed` など）にも付ける。
 - **「イベント」ではなく「状態」と呼ぶ。** `match` などは、比べた結果の状態で、第一段階はそれが変化し、第二段階は 1 回だけ観測する。
-- **第一段階は、状態が変化する。** `pull` が pull を自分で行うので、そのあとにローカルのタグを読み直して確かめる
-  （`mismatch` → `match`、`via=pulling`）。「pull の依頼が成功した」ことと、「ノードのタグがリモートの digest を指すようになった」ことは別。
-  確かめないと、次の場合に、揃っていないのに「pulled」と報告してしまう: pull の間にリモートがさらに進んで、別の digest を取ってきた
-  （タグ指定で pull するため）／ノードの状態の更新が遅れていて、まだ付け替わって見えない。
-  ノードの `status.images` は、kubelet が定期的に状態を更新したときに変わる（既定で 10 秒程度）ので、読み直しは最大 30 秒、2 秒おきに繰り返す。
-  それでも揃わなければ、`mismatch`（または `not-pulled`）のままと報告する。
+- **第一段階は、状態が変化する。** `pull` が pull を自分で行うので、そのあとの状態を報告する（`mismatch` → `match`、`via=pulling`）。
+  「pull の依頼が成功した」ことと、「ノードのタグがリモートの digest を指すようになった」ことは別で、
+  pull の間にリモートがさらに進んで、別の digest を取ってきた（タグ指定で pull するため）ことがありうる。
+  そこで、pull のあとの状態は、**pull 用 Pod が報告した digest**（`containerStatuses[].imageID`）から求める:
+  すべてのノードがリモートの digest を報告したら `match`、別の digest があれば `mismatch`、何も報告されなければ `not-pulled`。
+  pull 用 Pod の `imageID` は、pull が済んだ時点で分かる、正確な情報。
+- **`Node.status.images` を読み直して確かめない理由（実機で分かったこと）。** 最初は、pull のあとに `Node.status.images` を読み直し、
+  最大 30 秒、2 秒おきに繰り返す、という設計だった（kubelet が 10 秒程度で更新すると想定していた）。実機では、pull は成功していたのに、
+  30 秒後も、タグが見えなかった。kubelet が `Node.status.images` に載せる一覧は、kubelet の内部のキャッシュから作られ、
+  そのキャッシュは、数分ごとにしか更新されない、と考えている（kubelet のコードの理解。実機で、数分後に載ることを確かめる）。
+  読み直しにすると、うまくいった pull を、失敗と判断する。
+- **この遅れの影響が残るところ**: ローカルの状態を読むのは、`Node.status.images` から（`TagDigests`、`NodeTagDigests`）。
+  `pull` の直後（数分以内）に、もう一度 `pull` や `trigger` を実行すると、まだ `not-pulled` / `mismatch` と見えることがある。
+  pull は、すでにあるイメージには何もしない（安い）ので、害は小さい。しばらく待てば、`match` になる。
 - **第二段階は、投げっぱなし。** 最初の状態を報告し、アクションを依頼する（`trigger action requested`）だけで、結果は追わない。
   アクションの結果は Kubernetes の pull の仕組みが決めるので、確かめようがない（ベストエフォート）。次の実行で、新しい状態として分かる。
 - `--log-level`（下限）と `--log-states`（出す状態）で、実行時に絞る。そのコマンドが出さない状態の指定は、起動時にエラー。
@@ -382,7 +390,8 @@ Knative は、Revision を作ると、そのときリモートに問い合わせ
 
 - e2e はローカルレジストリを使う: 同じタグに別の内容を 2 回 push すれば「リモートのタグが動いた」状況を作れる。rate limit、認証の影響も受けない。
   kind のノードの containerd に、`localhost:5001` をローカルレジストリへ向ける設定を入れる（kind の公式の手順）。
-- ノードの `status.images` の更新の遅れ（pull 後の読み直しを繰り返す理由）は、kind でも再現される。e2e が、その確認になる。
+- ノードの `status.images` の更新の遅れ（数分。pull のあとの状態を、pull 用 Pod が報告した digest から求める理由）は、kind でも再現されるはず。
+  e2e は、ローカルの状態を読むステップの前に、`status.images` に反映されるまで待つ（`pull --dry-run` が `match` になるまで繰り返す）。
 - Knative（Revision の `imageDigest`）は、Knative Serving のインストールが重いので、e2e の対象外。単体テストのみ。
 
 ## 10. 実機で確認が必要な前提 [未確認]

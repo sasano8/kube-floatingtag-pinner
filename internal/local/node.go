@@ -124,21 +124,22 @@ func (n *Node) NodeTagDigests(ctx context.Context, image string) (map[string][]s
 // node's tag (e.g. :latest) is moved to the new image and a later Pod with
 // IfNotPresent starts from it. digest is the remote digest that triggered the pull;
 // it only names the Pod so that a new digest gets a new pull.
-func (n *Node) Pull(ctx context.Context, image, digest string) error {
+func (n *Node) Pull(ctx context.Context, image, digest string) ([]string, error) {
 	parsed, err := name.ParseReference(image)
 	if err != nil {
-		return fmt.Errorf("parse %q: %w", image, err)
+		return nil, fmt.Errorf("parse %q: %w", image, err)
 	}
 	ref := parsed.Name()
 
 	list, err := n.Client.Resource(nodes).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return fmt.Errorf("list nodes: %w", err)
+		return nil, fmt.Errorf("list nodes: %w", err)
 	}
 	var (
-		wg   sync.WaitGroup
-		mu   sync.Mutex
-		errs []error
+		wg     sync.WaitGroup
+		mu     sync.Mutex
+		errs   []error
+		pulled = map[string]struct{}{}
 	)
 	for i := range list.Items {
 		node := &list.Items[i]
@@ -148,18 +149,31 @@ func (n *Node) Pull(ctx context.Context, image, digest string) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := n.pullOn(ctx, node.GetName(), ref, digest); err != nil {
-				mu.Lock()
+			got, err := n.pullOn(ctx, node.GetName(), ref, digest)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
 				errs = append(errs, fmt.Errorf("node %s: %w", node.GetName(), err))
-				mu.Unlock()
+				return
+			}
+			if got != "" {
+				pulled[got] = struct{}{}
 			}
 		}()
 	}
 	wg.Wait()
-	return errors.Join(errs...)
+	out := make([]string, 0, len(pulled))
+	for d := range pulled {
+		out = append(out, d)
+	}
+	sort.Strings(out)
+	return out, errors.Join(errs...)
 }
 
-func (n *Node) pullOn(ctx context.Context, node, ref, digest string) error {
+// pullOn pulls on one node and returns the digest the node reports for what it pulled (the pull Pod's
+// imageID). That is known as soon as the pull is done, unlike Node.status.images, which the kubelet
+// refreshes only now and then.
+func (n *Node) pullOn(ctx context.Context, node, ref, digest string) (string, error) {
 	ns := n.PullNamespace
 	if ns == "" {
 		ns = "default"
@@ -196,7 +210,7 @@ func (n *Node) pullOn(ctx context.Context, node, ref, digest string) error {
 
 	pods := n.Client.Resource(podsGVR).Namespace(ns)
 	if _, err := pods.Create(ctx, pod, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("create pull pod: %w", err)
+		return "", fmt.Errorf("create pull pod: %w", err)
 	}
 	defer pods.Delete(context.WithoutCancel(ctx), podName, metav1.DeleteOptions{})
 
@@ -205,36 +219,37 @@ func (n *Node) pullOn(ctx context.Context, node, ref, digest string) error {
 	for {
 		got, err := pods.Get(ctx, podName, metav1.GetOptions{})
 		if err != nil {
-			return fmt.Errorf("get pull pod: %w", err)
+			return "", fmt.Errorf("get pull pod: %w", err)
 		}
-		if done, err := pullState(got); done || err != nil {
-			return err
+		if d, done, err := pullState(got); done || err != nil {
+			return d, err
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("timed out waiting for pull of %s", ref)
+			return "", fmt.Errorf("timed out waiting for pull of %s", ref)
 		case <-time.After(2 * time.Second):
 		}
 	}
 }
 
-// pullState inspects the pull Pod: pulled once the container status carries an
-// imageID; failed when the kubelet reports an image pull error.
-func pullState(pod *unstructured.Unstructured) (done bool, err error) {
+// pullState inspects the pull Pod: pulled once the container status carries an imageID (its
+// digest is returned: "repo@sha256:…" -> "sha256:…"); failed when the kubelet reports an image pull error.
+func pullState(pod *unstructured.Unstructured) (digest string, done bool, err error) {
 	css, _, _ := unstructured.NestedSlice(pod.Object, "status", "containerStatuses")
 	for _, c := range css {
 		m, _ := c.(map[string]interface{})
 		if id, _ := m["imageID"].(string); id != "" {
-			return true, nil
+			_, d, _ := strings.Cut(id, "@") // a bare image ID has no repo digest: "" (still pulled)
+			return d, true, nil
 		}
 		reason, _, _ := unstructured.NestedString(m, "state", "waiting", "reason")
 		switch reason {
 		case "ErrImagePull", "ImagePullBackOff", "InvalidImageName", "ErrImageNeverPull":
 			msg, _, _ := unstructured.NestedString(m, "state", "waiting", "message")
-			return false, fmt.Errorf("%s: %s", reason, msg)
+			return "", false, fmt.Errorf("%s: %s", reason, msg)
 		}
 	}
-	return false, nil
+	return "", false, nil
 }
 
 func ready(node *unstructured.Unstructured) bool {

@@ -9,7 +9,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 )
 
 // Target is an image to track together with the resources that reference it.
@@ -39,8 +38,10 @@ type Local interface {
 	// distinct value, over the places that hold the tag). Empty = the tag is not
 	// held locally at all. Digests held without the tag are not reported.
 	TagDigests(ctx context.Context, image string) ([]string, error)
-	// Pull brings the image at the given digest into the local cache.
-	Pull(ctx context.Context, image, digest string) error
+	// Pull brings the image into the local cache, and returns the digests it reports for what it pulled
+	// (one per distinct value; the tag is pulled, so this is what the tag points to now). digest is the
+	// remote digest that triggered the pull.
+	Pull(ctx context.Context, image, digest string) ([]string, error)
 }
 
 // OnNew decides what to do with an image the store has no record of.
@@ -83,12 +84,12 @@ type Result struct {
 	PullErr error // set when a pull was attempted and failed
 	Err     error
 
-	// After is the state read back after a successful pull, so a pull shows as a change of state
-	// (mismatch -> match). It stays mismatch/not-pulled if the local tag did not reach the remote
-	// digest (the tag moved again, the pull did not take, ...). Empty when nothing was pulled.
+	// After is the state after a successful pull, so a pull shows as a change of state
+	// (mismatch -> match). It is decided from what the pull reports: the digests that were pulled.
+	// It stays mismatch if they are not the remote digest (the tag moved again while pulling).
+	// Empty when nothing was pulled.
 	After      Status
 	AfterLocal []string
-	AfterErr   error
 }
 
 type Collector struct {
@@ -99,12 +100,6 @@ type Collector struct {
 
 	// DryRun reports what would be pulled without pulling. Everything else is read-only anyway.
 	DryRun bool
-
-	// After a pull the local tag is read back until it points to the remote digest, or
-	// VerifyTimeout passes: the nodes report their images with a delay (kubelet's node status
-	// update). Zero = 30s / 2s.
-	VerifyTimeout  time.Duration
-	VerifyInterval time.Duration
 }
 
 // CollectOnce runs one pass. Per-image failures are reported in the results;
@@ -155,44 +150,25 @@ func (c *Collector) collect(ctx context.Context, t Target) Result {
 		r.DryRun = true
 		return r
 	}
-	if err := c.Local.Pull(ctx, t.Image, remote); err != nil {
+	pulled, err := c.Local.Pull(ctx, t.Image, remote)
+	if err != nil {
 		r.PullErr = err
 		return r
 	}
 	r.Pulled = true
-	r.After, r.AfterLocal, r.AfterErr = c.verify(ctx, t.Image, remote)
+	r.After, r.AfterLocal = afterPull(pulled, remote)
 	return r
 }
 
-// verify reads the local tag back after a pull and says whether it now matches the remote.
-func (c *Collector) verify(ctx context.Context, image, remote string) (Status, []string, error) {
-	timeout, interval := c.VerifyTimeout, c.VerifyInterval
-	if timeout == 0 {
-		timeout = 30 * time.Second
+// afterPull says what the pull made of the state. Its source is what the pull itself reported, not
+// a read of the nodes' image lists afterwards: the kubelet refreshes those only now and then
+// (Node.status.images can be minutes behind), so reading them back would call a good pull a failure.
+func afterPull(pulled []string, remote string) (Status, []string) {
+	switch {
+	case len(pulled) == 1 && pulled[0] == remote:
+		return StatusMatch, pulled
+	case len(pulled) == 0:
+		return StatusNotPulled, nil
 	}
-	if interval == 0 {
-		interval = 2 * time.Second
-	}
-	deadline := time.NewTimer(timeout)
-	defer deadline.Stop()
-	for {
-		local, err := c.Local.TagDigests(ctx, image)
-		if err != nil {
-			return StatusError, nil, fmt.Errorf("read back after pull: %w", err)
-		}
-		state := StatusMismatch
-		switch {
-		case len(local) == 1 && local[0] == remote:
-			return StatusMatch, local, nil
-		case len(local) == 0:
-			state = StatusNotPulled
-		}
-		select {
-		case <-ctx.Done():
-			return state, local, nil
-		case <-deadline.C:
-			return state, local, nil
-		case <-time.After(interval):
-		}
-	}
+	return StatusMismatch, pulled
 }

@@ -196,7 +196,9 @@ Pod から取るのは「タグ」と「digest」の両方。タグはどのロ�
 このプロジェクトに相性がよいためで、アクションの種類を再デプロイに限る意図はない。
 
 - アクションは、リソースの annotation で指定する: `floatingtag-pinner/action: <名前>`。
-- **未指定は `none`（検知とログだけ）**。ユーザーの管轄のものには、頼まれない限り触らない。ドライランも兼ねる。
+- **未指定は `info`（差分をログに出すだけ）**。ユーザーの管轄のものには、頼まれない限り触らない。
+  リソースに手を入れずに、検知できているかを確かめる手段にもなる。`none` は、検知した結果にも何もしない（ログも出さない）。
+- `trigger --dry-run`（予定）は、どのアクションも `info` として扱うスイッチ。`info` はリソース単位、`--dry-run` は全体の指定。
 - アクションは、対象の種類ごとに適用できるものが決まっている。適用できない組み合わせは、エラーにする。
 - 実装は、`Action`（種類に適用できるかの判定と、実行）の interface の裏に置き、`Actor` が annotation で指定された `Action` を選んで実行する。
   アクションを足しても、検知は変わらない。
@@ -206,7 +208,8 @@ Pod から取るのは「タグ」と「digest」の両方。タグはどのロ�
 
 | アクション | 対象 | 操作 | spec への影響 |
 | --- | --- | --- | --- |
-| `none` | すべて | 検知とログだけ | 無し |
+| `none` | すべて | 何もしない | 無し |
+| `info`（既定） | すべて | 差分があることをログに出す | 無し |
 | `delete-pods` | Deployment / StatefulSet / DaemonSet | 古い Pod を削除する（ReplicaSet 等が作り直す） | 無し |
 | `restart` | Deployment / StatefulSet / DaemonSet | Pod テンプレートに `restartedAt` の annotation を付けて、段階的に入れ替える | annotation を 1 つ足す |
 | `new-revision` | Knative Service | ksvc の `spec.template` に annotation を足し、新しい Revision を作る | annotation を 1 つ足す |
@@ -259,4 +262,4 @@ selfHeal が差分として戻さないか。戻すなら `ignoreDifferences` �
 | ローカルキャッシュ | 各ノードのイメージストア（4 章） |
 | index digest | マルチアーキのタグ全体が指す digest。platform digest はアーキごとの個別のもの |
 | 正 | 比較の基準。第一段階はリモート、第二段階はローカル |
-| アクター / アクション | アクター（Actor）は、検知した差分に対して、指定されたアクション（Action）を実行する側。アクションは「何をするか」（`none`、`delete-pods` など） |
+| アクター / アクション | アクター（Actor）は、検知した差分に対して、指定されたアクション（Action）を実行する側。アクションは「何をするか」（`info`、`none`、`delete-pods` など） |

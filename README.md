@@ -25,7 +25,7 @@
 | ローカルキャッシュ | Kubernetes が pull して各ノードに保持しているイメージ（containerd 等のイメージストア）。Harbor のようなレジストリを建てるものではない。同期先に任意のレジストリを使う形も将来は想定 | ○ | ○ |
 | Kubernetes リソース | 所定の annotation が付いた Deployment / StatefulSet / DaemonSet / Knative Service。参照元 | ○ | ○ |
 | コレクター | 第一段階: リソースからイメージを収集し、リモートレジストリとローカルキャッシュを比較、差分があれば pull。第二段階: ローカルキャッシュの digest と、実行中の Pod / Revision の digest を比較し、差分を検知 | ○ | ○ |
-| アクター（Actor） | 検知した差分に対して、リソースの annotation で指定されたアクション（Action）を実行する。組み込みは再デプロイにつながるもの（Deployment 等は Pod の削除や再ロールアウト、Knative は新 Revision の作成）。`none` は検知とログだけ | | ○ |
+| アクター（Actor） | 検知した差分に対して、リソースの annotation で指定されたアクション（Action）を実行する。組み込みは再デプロイにつながるもの（Deployment 等は Pod の削除や再ロールアウト、Knative は新 Revision の作成）。`info` は差分をログに出すだけ、`none` は何もしない | | ○ |
 
 > 第二段階ではリモートレジストリとの直接のやり取りは行わない。ローカルキャッシュの digest と、実行中の Pod の `imageID`（Knative は Revision の `imageDigest`）を比べ、不一致ならアクションを実行する。
 > spec の image は書き換えない。
@@ -104,7 +104,7 @@ digest を別に記録することはしない（正本はリモートのレジ�
 
 どのコマンドも、既定は 1 回実行して終了。`--daemon`（と `--interval`）で常駐して繰り返す。
 第二段階はアクション（Pod の削除など）の実行を伴うので、`pull` だけでは動かない。第二段階まで行うときは、`trigger` か `sync` を明示する。
-アクションは、リソースの annotation `floatingtag-pinner/action` で指定する。未指定は `none`（検知とログだけ）で、何も変更しない。
+アクションは、リソースの annotation `floatingtag-pinner/action` で指定する。未指定は `info`（差分をログに出すだけ）で、リソースには何も変更しない。`none` は、検知した結果にも何もしない。
 
 ## インストール
 

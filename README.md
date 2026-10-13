@@ -99,11 +99,11 @@ digest を別に記録することはしない（正本はリモートのレジ�
 | コマンド | 内容 | 状態 |
 | --- | --- | --- |
 | `pinner pull` | 第一段階: リモートで変わったイメージを、ローカルキャッシュに pull する | 実装済み |
-| `pinner apply` | 第二段階: ローカルを正に、実行中のものが古ければ、指定のアクションを実行する | 未実装 |
-| `pinner sync` | `pull` → `apply` を続けて行う | 未実装 |
+| `pinner trigger` | 第二段階: ローカルを正に、実行中のものが古ければ、指定のアクションを引き起こす（結果はアクション次第で、保証しない） | 未実装 |
+| `pinner sync` | `pull` → `trigger` を続けて行う | 未実装 |
 
 どのコマンドも、既定は 1 回実行して終了。`--daemon`（と `--interval`）で常駐して繰り返す。
-第二段階はアクション（Pod の削除など）の実行を伴うので、`pull` だけでは動かない。第二段階まで行うときは、`apply` か `sync` を明示する。
+第二段階はアクション（Pod の削除など）の実行を伴うので、`pull` だけでは動かない。第二段階まで行うときは、`trigger` か `sync` を明示する。
 アクションは、リソースの annotation `floatingtag-pinner/action` で指定する。未指定は `none`（検知とログだけ）で、何も変更しない。
 
 ## インストール
@@ -169,8 +169,8 @@ CI が、`main` への push で `ghcr.io/sasano8/kube-floatingtag-pinner`（amd6
 ./pinner pull --daemon --interval 5m   # 常駐して、5分ごとに繰り返す
 
 # 第二段階（未実装・予定）
-./pinner apply                         # 第二段階だけ
-./pinner sync --daemon                 # pull → apply を、続けて繰り返す
+./pinner trigger                       # 第二段階だけ
+./pinner sync --daemon                 # pull → trigger を、続けて繰り返す
 ```
 
 出力は、イメージごとに 1 行のログ（次は形式の例。実クラスタで取った出力ではない）。
@@ -234,7 +234,7 @@ Keel・Knative 本体・Argo CD Image Updater では、ksvc の `latest` 追従�
 
 ## 未決事項
 
-- コマンド名（`pull` / `apply` / `sync`）は仮。
-- 第二段階（`apply`、アクター、アクション）の実装。
+- コマンド名（`pull` / `trigger`）は決定。両方を続けて行う `sync` は仮。
+- 第二段階（`trigger`、アクター、アクション）の実装。
 - 任意のレジストリを同期先にする `--local`（`registry`）。
 - Argo CD の `selfHeal` との折り合い（第二段階の実運用前に確認。[docs/design.md](./docs/design.md) 参照）。

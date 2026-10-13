@@ -59,7 +59,7 @@ kubelet / Knative に新しいイメージを取り直させる。リモート�
   - Knative Service: Pod を消しても同じ digest で作り直されるだけ（Revision は不変）。ksvc の `spec.template` に
     annotation を足して新しい Revision を作る（タグはそのときに解決し直される）。
 - どの操作をするかは「アクション」として切り離し、annotation で指定する（案: `floatingtag-pinner/action: none | delete-pods | restart | new-revision`）。
-  未指定は `none`（検知とログだけ）。コマンドは `pinner apply`。詳細は [docs/design.md](./docs/design.md)。
+  未指定は `none`（検知とログだけ）。コマンドは `pinner trigger`。詳細は [docs/design.md](./docs/design.md)。
 - 前提: 再デプロイで新しいイメージを使うには、ノードの `latest` タグが新しいイメージを指している必要がある
   （第一段階の pull をタグ指定にしている理由）。
 

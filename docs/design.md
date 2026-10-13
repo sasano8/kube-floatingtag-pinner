@@ -278,6 +278,7 @@ Deployment 等の「ローリング更新」と、Knative の「新しい Revisi
 そこで、`restart` と `new-revision` を別のアクションにせず、`rollout`（新しい世代を出す）にまとめた。
 `delete-pods` は、Knative には対応しない（`Supports(kind)` が、対応しない組み合わせをエラーにする）。
 
+- Knative で、テンプレートの annotation の変更が新しい Revision を作ることは、ソースの読みでは確かめた（[research.md](./research.md) の 4 章）。実機は未確認。
 - annotation の key は `floatingtag-pinner/restartedAt`（値は UTC の時刻、秒単位）。`kubectl rollout restart` の
   `kubectl.kubernetes.io/restartedAt` とは別にして、kubectl との衝突を避ける。
   同じ resource の 2 つの finding（たとえば 2 つの image）が同じ秒に patch しても、同じ値なので、2 回目は何も変えず、rollout は 1 回で済む。

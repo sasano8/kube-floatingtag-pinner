@@ -1,6 +1,8 @@
-// Package collector compares the remote registry with the local registry
-// (store) for the images referenced by annotated Kubernetes resources.
-// It does not depend on how it is run (once, loop, operator).
+// Package collector syncs the local cache (the image stores of the nodes) with the
+// remote registry for the images referenced by annotated Kubernetes resources: the
+// remote is the source of truth, and only the floating tag's digest is compared.
+// It does not depend on how it is run (once, daemon, operator).
+// See docs/design.md for the reasoning.
 package collector
 
 import (

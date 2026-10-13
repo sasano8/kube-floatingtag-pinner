@@ -137,6 +137,8 @@ internal/registry/   リモートレジストリの digest 取得（go-container
 internal/local/      ローカルキャッシュ（ノードのイメージストアを読む実装）
 ```
 
+設計の詳細（なぜそうしているか、採らなかった案、実機で未確認の前提）は [docs/design.md](./docs/design.md)。
+
 ## 既存ツールの対応状況
 
 Keel・Knative 本体・Argo CD Image Updater では、ksvc の `latest` 追従を満たせないことを確認している

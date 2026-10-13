@@ -110,18 +110,43 @@ digest を別に記録することはしない（正本はリモートのレジ�
 
 手元で動かす想定（クラスタの中で動かす構成は、まだ考えていない）。
 
-- 必要なもの: Go（`go.mod` の版）、対象クラスタに届く `kubeconfig`。
+- 必要なもの: 対象クラスタに届く `kubeconfig`。
 - 権限: Node の list、対象リソース（Deployment など）の list、`--pull-namespace` での Pod の create / get / delete。
   手元の `kubeconfig` が管理者権限なら、追加の設定は要らない。
 
+### バイナリをダウンロードする
+
+CI が、`main` への push のたびに、[`latest` の Release](https://github.com/sasano8/kube-floatingtag-pinner/releases/tag/latest) を
+最新のバイナリで**上書き**する（バージョン番号は付けない）。ファイルは次のとおり。
+
+| OS | アーキ | ファイル |
+| --- | --- | --- |
+| Linux | amd64 / arm64 | `pinner_linux_amd64.tar.gz` / `pinner_linux_arm64.tar.gz` |
+| macOS | amd64 / arm64 | `pinner_darwin_amd64.tar.gz` / `pinner_darwin_arm64.tar.gz` |
+| Windows | amd64 / arm64 | `pinner_windows_amd64.zip` / `pinner_windows_arm64.zip` |
+
+`checksums.txt` に SHA-256 がある。
+
+```sh
+# gh があれば（Linux の amd64 の例）
+gh release download latest -R sasano8/kube-floatingtag-pinner -p 'pinner_linux_amd64.tar.gz'
+tar xzf pinner_linux_amd64.tar.gz       # → pinner
+./pinner pull --help
+```
+
+- ブラウザからは、上の Release のページで、自分の OS のファイルを取る。Windows は zip を展開して `pinner.exe` を使う。
+- macOS のバイナリは署名していないので、初回に警告される。`xattr -d com.apple.quarantine pinner` で外せる。
+- リポジトリが private の間は、Release のダウンロードに GitHub の認証が要る（`gh` ならログイン済みで取れる）。
+
+### ソースからビルドする
+
 ```sh
 git clone https://github.com/sasano8/kube-floatingtag-pinner && cd kube-floatingtag-pinner
-go build -o pinner ./cmd/pinner     # ./pinner pull ... で実行できる
+go build -o pinner ./cmd/pinner     # Go は go.mod の版
 # または、ビルドせずに: go run ./cmd/pinner pull ...
 ```
 
-CI が、`main` への push で `ghcr.io/sasano8/kube-floatingtag-pinner`（amd64 / arm64）のイメージを公開する。
-ただし、このイメージでの実行は試していない。
+CI は、あわせて `ghcr.io/sasano8/kube-floatingtag-pinner`（amd64 / arm64 のコンテナイメージ）も公開する。ただし、このイメージでの実行は試していない。
 
 ## 実行手順の例（`app-authorization-demo` で確かめる）
 
@@ -137,7 +162,7 @@ CI が、`main` への push で `ghcr.io/sasano8/kube-floatingtag-pinner`（amd6
 2. **ドライランで見る**（何も pull しない。リモートとローカルを読むだけ）。
 
    ```sh
-   ./pinner pull --dry-run --namespace app-authorization-demo
+   ./pinner pull --dry-run --namespace app-authorization-demo   # Windows は pinner.exe
    ```
 
    `changed (dry-run: would pull)` と出れば、ローカルのタグが古い。リモートの digest（`remote=`）と、ローカル（`local=`）を見比べる。

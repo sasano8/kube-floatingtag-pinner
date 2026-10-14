@@ -110,6 +110,8 @@ digest だけでタグが付いていないものは見ない（使われると�
 
 ## 5. pull の仕組み [実装済み・実機で確認済み]
 
+他の方式（ノードの常駐エージェントが直接 pull する、DaemonSet で pull するなど）との比較は、[research.md](./research.md) の 5 章を参照。
+
 ### 方式
 
 kubelet に pull させるため、Ready な各ノードに、そのノード固定（`spec.nodeName`）の短命な Pod を作る。

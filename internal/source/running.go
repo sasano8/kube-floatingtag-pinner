@@ -49,6 +49,9 @@ func (k *KubeRunning) pods(ctx context.Context, r trigger.Resource, want string)
 	var out []trigger.Running
 	for i := range list.Items {
 		pod := &list.Items[i]
+		if pod.GetDeletionTimestamp() != nil {
+			continue // on its way out (e.g. the old Pod while a rollout finishes): not what is running
+		}
 		node, _, _ := unstructured.NestedString(pod.Object, "spec", "nodeName")
 		css, _, _ := unstructured.NestedSlice(pod.Object, "status", "containerStatuses")
 		for _, c := range css {

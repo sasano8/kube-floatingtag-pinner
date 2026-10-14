@@ -4,7 +4,9 @@ import (
 	"context"
 	"reflect"
 	"testing"
+	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -40,11 +42,14 @@ func fakeClient(objs ...runtime.Object) *dynamicfake.FakeDynamicClient {
 
 func TestRunningPods(t *testing.T) {
 	web := map[string]interface{}{"app": "web"}
+	terminating := pod("web-5", "n1", web, "ghcr.io/o/app:latest", "ghcr.io/o/app@sha256:old") // being deleted: skipped
+	terminating.SetDeletionTimestamp(&metav1.Time{Time: time.Now()})
 	client := fakeClient(
 		pod("web-1", "n1", web, "ghcr.io/o/app:latest", "ghcr.io/o/app@sha256:aaa"),
 		pod("web-2", "n2", web, "ghcr.io/o/app:latest", "ghcr.io/o/app@sha256:bbb"),
 		pod("web-3", "n2", web, "ghcr.io/o/app:latest", "sha256:onlyanid"),                // no repo digest: skipped
 		pod("web-4", "n2", web, "ghcr.io/o/sidecar:latest", "ghcr.io/o/sidecar@sha256:s"), // other image
+		terminating,
 		pod("db-1", "n1", map[string]interface{}{"app": "db"}, "ghcr.io/o/app:latest", "ghcr.io/o/app@sha256:zzz"),
 	)
 	r := trigger.Resource{Kind: "Deployment", Namespace: "ns", Name: "web", Selector: "app=web"}

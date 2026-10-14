@@ -49,8 +49,8 @@ func (k *KubeRunning) pods(ctx context.Context, r trigger.Resource, want string)
 	var out []trigger.Running
 	for i := range list.Items {
 		pod := &list.Items[i]
-		if pod.GetDeletionTimestamp() != nil {
-			continue // on its way out (e.g. the old Pod while a rollout finishes): not what is running
+		if !inUse(pod) {
+			continue
 		}
 		node, _, _ := unstructured.NestedString(pod.Object, "spec", "nodeName")
 		css, _, _ := unstructured.NestedSlice(pod.Object, "status", "containerStatuses")
@@ -68,6 +68,18 @@ func (k *KubeRunning) pods(ctx context.Context, r trigger.Resource, want string)
 		}
 	}
 	return out, nil
+}
+
+// inUse says whether a Pod counts as running its image. The definition (docs/design.md, "実行中の Pod"):
+// not being deleted (the old Pod while a rollout finishes is still listed, with its old digest), and not
+// finished (phase Succeeded / Failed: what a Job leaves behind). Whether the Pod has an image digest to
+// compare is decided separately, per container, from imageID.
+func inUse(pod *unstructured.Unstructured) bool {
+	if pod.GetDeletionTimestamp() != nil {
+		return false
+	}
+	phase, _, _ := unstructured.NestedString(pod.Object, "status", "phase")
+	return phase != "Succeeded" && phase != "Failed"
 }
 
 func (k *KubeRunning) revision(ctx context.Context, r trigger.Resource, want string) ([]trigger.Running, error) {

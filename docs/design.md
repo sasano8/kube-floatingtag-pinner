@@ -228,6 +228,17 @@ collect ──▶ pull    （対象のイメージを、リモートとローカ
 - Deployment / StatefulSet / DaemonSet: Pod の `imageID`。タグは Pod の image 欄で分かる。
 - Knative: Revision の `imageDigest`。Pod の image は digest で固定されていて、タグは Revision / ksvc の spec にある。
 
+### 実行中の Pod
+
+Pod が「そのイメージで動いている」と数えるのは、次をすべて満たすとき（`source.inUse`、テストは `TestRunningPodStates`）。
+
+- 削除中でない（`deletionTimestamp` が無い）。ロールアウトが終わる間、古い Pod は終了処理中のまま一覧に残り、古い digest を持つ。これを数えると、`mismatch` の誤報になる（e2e で見つかった）。
+- 終わっていない（`status.phase` が `Succeeded` / `Failed` でない）。Job が残した Pod や、退避（evict）された Pod は、もう動いていない。
+- そのイメージの `containerStatuses` に、repo の digest つきの `imageID` がある。まだ pull されていない（`imageID` が空）、または digest が無い（イメージ ID だけ）ものは、比べる相手がないので数えない。
+
+`pinner` が Pod から読むのは、`deletionTimestamp`、`status.phase`、`spec.nodeName`、`containerStatuses[].image` / `imageID` だけ。
+状態の洗い出しは、この 5 項目の組み合わせに限る。e2e などで新しい状態が見つかったら、この定義と `TestRunningPodStates` に足す。
+
 Pod から取るのは「タグ」と「digest」の両方。タグはどのローカルのエントリと比べるかの鍵で、比べるのは digest 同士。
 
 ### 実装の状況

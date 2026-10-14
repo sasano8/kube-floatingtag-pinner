@@ -152,10 +152,12 @@ step "trigger with on-mismatch=rollout: a new rollout starts (only an annotation
 run_pinner trigger || fail "trigger exited non-zero"
 expect 'msg="trigger mismatch"'
 expect 'trigger action requested.*action=rollout'
-kubectl -n "$NS" get deployment app -o jsonpath='{.spec.template.metadata.annotations}' | grep -q 'floatingtag-pinner/restartedAt' ||
-  fail "the Pod template must carry the rollout annotation"
-[ "$(kubectl -n "$NS" get deployment app -o jsonpath='{.spec.template.spec.containers[0].image}')" = "$IMAGE" ] ||
-  fail "the image field must not be touched"
+template_annotations=$(kubectl -n "$NS" get deployment app -o jsonpath='{.spec.template.metadata.annotations}')
+case "$template_annotations" in *floatingtag-pinner/restartedAt*) ;; *)
+  fail "the Pod template must carry the rollout annotation (got: ${template_annotations:-none})" ;;
+esac
+image_now=$(kubectl -n "$NS" get deployment app -o jsonpath='{.spec.template.spec.containers[0].image}')
+[ "$image_now" = "$IMAGE" ] || fail "the image field must not be touched (got: $image_now)"
 kubectl -n "$NS" rollout status deployment/app --timeout=180s
 
 step "trigger again: the new Pod runs the local digest -> match, and nothing more is requested"

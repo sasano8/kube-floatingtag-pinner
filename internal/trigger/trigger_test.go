@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sasano8/kube-floatingtag-pinner/internal/state"
-	"github.com/sasano8/kube-floatingtag-pinner/internal/trigger"
+	"github.com/sasano8/pinner/internal/state"
+	"github.com/sasano8/pinner/internal/trigger"
 )
 
 type fakeSource []trigger.Resource

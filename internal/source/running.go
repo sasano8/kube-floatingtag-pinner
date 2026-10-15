@@ -12,7 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 
-	"github.com/sasano8/kube-floatingtag-pinner/internal/trigger"
+	"github.com/sasano8/pinner/internal/trigger"
 )
 
 var (

@@ -1,4 +1,4 @@
-module github.com/sasano8/kube-floatingtag-pinner
+module github.com/sasano8/pinner
 
 go 1.26.0
 

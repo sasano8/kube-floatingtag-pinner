@@ -9,7 +9,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 
-	"github.com/sasano8/kube-floatingtag-pinner/internal/registry"
+	"github.com/sasano8/pinner/internal/registry"
 )
 
 func resolve(t *testing.T, k authn.Keychain, image string) authn.AuthConfig {

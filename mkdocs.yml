@@ -1,4 +1,4 @@
-site_name: kube-floatingtag-pinner
+site_name: pinner
 site_description: Keep what runs in Kubernetes in step with the floating tags (e.g. :latest) of the remote registry.
 docs_dir: .site-src  # made by scripts/prepare-docs-site.sh
 site_dir: site

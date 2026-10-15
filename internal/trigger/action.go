@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sasano8/kube-floatingtag-pinner/internal/state"
+	"github.com/sasano8/pinner/internal/state"
 )
 
 // DefaultAction is used when a resource names no action for a state: nothing is done.

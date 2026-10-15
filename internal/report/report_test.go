@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sasano8/kube-floatingtag-pinner/internal/report"
+	"github.com/sasano8/pinner/internal/report"
 )
 
 func capture(t *testing.T, level slog.Level) *bytes.Buffer {

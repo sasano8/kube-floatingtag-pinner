@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/sasano8/kube-floatingtag-pinner/internal/collector"
+	"github.com/sasano8/pinner/internal/collector"
 )
 
 type fakeSource []collector.Target

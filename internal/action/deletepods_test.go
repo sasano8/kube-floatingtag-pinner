@@ -12,8 +12,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stesting "k8s.io/client-go/testing"
 
-	"github.com/sasano8/kube-floatingtag-pinner/internal/action"
-	"github.com/sasano8/kube-floatingtag-pinner/internal/trigger"
+	"github.com/sasano8/pinner/internal/action"
+	"github.com/sasano8/pinner/internal/trigger"
 )
 
 func pod(name string) *unstructured.Unstructured {

@@ -15,7 +15,7 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	k8stesting "k8s.io/client-go/testing"
 
-	"github.com/sasano8/kube-floatingtag-pinner/internal/local"
+	"github.com/sasano8/pinner/internal/local"
 )
 
 func node(name string, names ...[]string) *unstructured.Unstructured {

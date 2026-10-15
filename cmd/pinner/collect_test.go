@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sasano8/kube-floatingtag-pinner/internal/trigger"
+	"github.com/sasano8/pinner/internal/trigger"
 )
 
 func sample() []trigger.Resource {

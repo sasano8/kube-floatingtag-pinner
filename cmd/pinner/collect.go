@@ -10,7 +10,7 @@ import (
 	"sort"
 	"text/tabwriter"
 
-	"github.com/sasano8/kube-floatingtag-pinner/internal/trigger"
+	"github.com/sasano8/pinner/internal/trigger"
 )
 
 // collectFlags are the flags of collect.

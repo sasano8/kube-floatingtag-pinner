@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/sasano8/kube-floatingtag-pinner/internal/registry"
+	"github.com/sasano8/pinner/internal/registry"
 )
 
 // Network test: run with PINNER_SMOKE_IMAGE=<image> go test ./internal/registry

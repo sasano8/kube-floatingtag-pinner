@@ -1,4 +1,6 @@
-# kube-floatingtag-pinner
+# pinner
+
+（旧名: kube-floatingtag-pinner。名前の意味: floating tag（`latest` など、指す先が動くタグ）に、動いているものを留める（pin する）ツール。）
 
 `latest` などの可変タグ（floating tag）が指す実体（digest）を追跡し、変化を検知して、
 新しいイメージで動かし直すための仕組み。ラフスケッチ段階（詳細は [IDEA.md](./IDEA.md)）。
@@ -111,7 +113,7 @@ digest を別に記録することはしない（正本はリモートのレジ�
 
 ### バイナリをダウンロードする
 
-[`latest` の Release](https://github.com/sasano8/kube-floatingtag-pinner/releases/tag/latest) に、`main` の最新から作ったバイナリがある。
+[`latest` の Release](https://github.com/sasano8/pinner/releases/tag/latest) に、`main` の最新から作ったバイナリがある。
 `main` に push するたびに、CI が**上書き**する（バージョン番号は付けない）。
 
 | OS | アーキ | ファイル |
@@ -126,9 +128,9 @@ digest を別に記録することはしない（正本はリモートのレジ�
 
 ```sh
 # gh があれば（Linux の amd64 の例。ファイル名は表から選ぶ）
-gh release download latest -R sasano8/kube-floatingtag-pinner -p 'pinner_linux_amd64.tar.gz'
+gh release download latest -R sasano8/pinner -p 'pinner_linux_amd64.tar.gz'
 # gh がなければ
-curl -fsSLO https://github.com/sasano8/kube-floatingtag-pinner/releases/download/latest/pinner_linux_amd64.tar.gz
+curl -fsSLO https://github.com/sasano8/pinner/releases/download/latest/pinner_linux_amd64.tar.gz
 
 tar xzf pinner_linux_amd64.tar.gz     # → ./pinner
 sudo mv pinner /usr/local/bin/        # 任意。PATH の通った場所へ
@@ -140,7 +142,7 @@ pinner collect --help
 **Windows**（PowerShell）
 
 ```powershell
-Invoke-WebRequest https://github.com/sasano8/kube-floatingtag-pinner/releases/download/latest/pinner_windows_amd64.zip -OutFile pinner.zip
+Invoke-WebRequest https://github.com/sasano8/pinner/releases/download/latest/pinner_windows_amd64.zip -OutFile pinner.zip
 Expand-Archive pinner.zip -DestinationPath .       # → .\pinner.exe
 .\pinner.exe collect --help
 ```
@@ -152,12 +154,12 @@ Expand-Archive pinner.zip -DestinationPath .       # → .\pinner.exe
 Go（`go.mod` の版）が必要。
 
 ```sh
-git clone https://github.com/sasano8/kube-floatingtag-pinner && cd kube-floatingtag-pinner
+git clone https://github.com/sasano8/pinner && cd pinner
 go build -o pinner ./cmd/pinner          # → ./pinner（Windows は pinner.exe）
 # ビルドせずに試すなら: go run ./cmd/pinner collect
 ```
 
-CI は、あわせて `ghcr.io/sasano8/kube-floatingtag-pinner`（amd64 / arm64 のコンテナイメージ。`Dockerfile`）も公開している。ただし、このイメージでの実行は試していない。
+CI は、あわせて `ghcr.io/sasano8/pinner`（amd64 / arm64 のコンテナイメージ。`Dockerfile`）も公開している。ただし、このイメージでの実行は試していない。
 認証情報の置き場は、「[非公開レジストリ（認証）](#非公開レジストリ認証)」を参照。
 
 ### 動作確認（インストールできたか）
@@ -511,7 +513,7 @@ internal/local/      ローカルキャッシュ（ノードのイメージス�
   3. どちらもなければ、認証なし（`pinner` を動かす環境の既定の認証を使う）。
   
   1 と 2 で、**存在しないファイルを指したら、エラー**にする（パスの打ち間違いや、Secret のマウント忘れに気づけるように）。
-- **コンテナイメージ**（`ghcr.io/sasano8/kube-floatingtag-pinner`）は、`PINNER_CREDENTIAL=/credential/config.json` を持ち、
+- **コンテナイメージ**（`ghcr.io/sasano8/pinner`）は、`PINNER_CREDENTIAL=/credential/config.json` を持ち、
   そのパスに、**認証情報の入っていない JSON**（`{"auths":{}}`）を置いてある。そのため、何もマウントしなくても、エラーにならない（認証なしで動く）。
   利用者は、**そのパスに、認証情報のファイルをマウントする**だけでよい。
   - Secret をディレクトリとしてマウントする: `docker-registry` 型の Secret のキーは `.dockerconfigjson` なので、`items` で

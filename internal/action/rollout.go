@@ -13,8 +13,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 
-	"github.com/sasano8/kube-floatingtag-pinner/internal/source"
-	"github.com/sasano8/kube-floatingtag-pinner/internal/trigger"
+	"github.com/sasano8/pinner/internal/source"
+	"github.com/sasano8/pinner/internal/trigger"
 )
 
 const (

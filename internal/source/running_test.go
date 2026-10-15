@@ -12,8 +12,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 
-	"github.com/sasano8/kube-floatingtag-pinner/internal/source"
-	"github.com/sasano8/kube-floatingtag-pinner/internal/trigger"
+	"github.com/sasano8/pinner/internal/source"
+	"github.com/sasano8/pinner/internal/trigger"
 )
 
 func pod(name, node string, labels map[string]interface{}, image, imageID string) *unstructured.Unstructured {

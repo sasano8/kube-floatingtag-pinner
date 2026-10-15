@@ -11,9 +11,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 
-	"github.com/sasano8/kube-floatingtag-pinner/internal/collector"
-	"github.com/sasano8/kube-floatingtag-pinner/internal/source"
-	"github.com/sasano8/kube-floatingtag-pinner/internal/trigger"
+	"github.com/sasano8/pinner/internal/collector"
+	"github.com/sasano8/pinner/internal/source"
+	"github.com/sasano8/pinner/internal/trigger"
 )
 
 func obj(apiVersion, kind, ns, name string, annotated bool, containers ...string) *unstructured.Unstructured {

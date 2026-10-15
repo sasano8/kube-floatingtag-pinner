@@ -5,7 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-repo=${GITHUB_REPOSITORY:-sasano8/kube-floatingtag-pinner}
+repo=${GITHUB_REPOSITORY:-sasano8/pinner}
 base="https://github.com/${repo}/blob/main"
 
 rm -rf .site-src

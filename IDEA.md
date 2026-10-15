@@ -1,4 +1,4 @@
-# kube-floatingtag-pinner（設計メモ。第一段階は実装済み・[README.md](./README.md) 参照）
+# pinner（設計メモ。第一段階は実装済み・[README.md](./README.md) 参照）
 
 annotation で対象を指定したワークロード（Deployment / StatefulSet / DaemonSet / Knative Service）の
 イメージを定期監視し、`latest` などの可変タグの指す実体（digest）が変わったら、新しいイメージで

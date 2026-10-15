@@ -20,13 +20,13 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
-	"github.com/sasano8/kube-floatingtag-pinner/internal/action"
-	"github.com/sasano8/kube-floatingtag-pinner/internal/collector"
-	"github.com/sasano8/kube-floatingtag-pinner/internal/local"
-	"github.com/sasano8/kube-floatingtag-pinner/internal/registry"
-	"github.com/sasano8/kube-floatingtag-pinner/internal/report"
-	"github.com/sasano8/kube-floatingtag-pinner/internal/source"
-	"github.com/sasano8/kube-floatingtag-pinner/internal/trigger"
+	"github.com/sasano8/pinner/internal/action"
+	"github.com/sasano8/pinner/internal/collector"
+	"github.com/sasano8/pinner/internal/local"
+	"github.com/sasano8/pinner/internal/registry"
+	"github.com/sasano8/pinner/internal/report"
+	"github.com/sasano8/pinner/internal/source"
+	"github.com/sasano8/pinner/internal/trigger"
 )
 
 // selection holds the flags that say which resources and images are looked at. Every command

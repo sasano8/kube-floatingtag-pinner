@@ -161,7 +161,7 @@ pull のあとの状態を、pull 用 Pod が報告した digest から求める
 
 ### 認証と名前空間
 
-- `--pull-namespace`（既定 `default`）に Pod を作る。pull の認証は、Pod の pull の仕組みに従う: 基本はノード側
+- `--pull-namespace` に Pod を作る。既定は、`pinner` 自身が動いている namespace（Pod のサービスアカウントのマウントから読む）。クラスタの外（`kubeconfig`）では `default`。pull の認証は、Pod の pull の仕組みに従う: 基本はノード側
   （kubelet の credential provider、kubelet が読むノード上の `config.json`、containerd の認証設定）。`imagePullSecrets` は扱わない（アプリのユーザーが、自分の権限の Secret で pull させるための仕組みで、運用する側のツールには合わない）。
 - リモートの digest 取得の認証（`pinner` 自身がレジストリに接続する）は、pull の認証（kubelet が接続する）とは**別**。
   `--credential <ファイル>`（`pull` のフラグ。docker の `config.json` と同じ形式。`registry.FileKeychain`）で渡す。そのファイルにないレジストリは、匿名。

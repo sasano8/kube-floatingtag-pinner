@@ -108,7 +108,7 @@ digest を別に記録することはしない（正本はリモートのレジ�
   | コマンド | 権限 |
   | --- | --- |
   | `collect` | 対象リソースの `list`（`apps` の `deployments`、`statefulsets`、`daemonsets`、Knative の `services`） |
-  | `pull` | 上記 + `nodes` の `list` + `--pull-namespace` での `pods` の `create` / `get` / `delete` |
+  | `pull` | 上記 + `nodes` の `list` + `--pull-namespace`（既定: クラスタの中では `pinner` 自身の namespace、外では `default`）での `pods` の `create` / `get` / `delete` |
   | `trigger` | `collect` と同じ + `nodes` の `list` + `pods` の `list` + Knative の `revisions` の `get`。アクションごとに、`rollout` は対象リソースの `patch`、`delete-pods` は `pods` の `delete` |
 
 ### バイナリをダウンロードする

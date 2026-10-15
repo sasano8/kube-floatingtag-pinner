@@ -138,7 +138,7 @@ func registerPull(fs *flag.FlagSet) *pullFlags {
 	return &pullFlags{
 		common:      registerCommon(fs, "report what would be pulled, without pulling"),
 		onNew:       fs.String("on-new", string(collector.OnNewRegister), "for images the local cache does not hold: register (pull) | ignore"),
-		pullNS:      fs.String("pull-namespace", "default", "namespace for the short-lived Pods that make nodes pull images"),
+		pullNS:      fs.String("pull-namespace", "", "namespace for the short-lived Pods that make nodes pull images (default: the namespace pinner runs in, or \"default\" outside a cluster)"),
 		pullTimeout: fs.Duration("pull-timeout", 2*time.Minute, "per-node timeout for a pull"),
 		credential:  fs.String("credential", "", "file in docker config.json format with the registry credentials to look up the remote digest (empty: none; default: the default keychain)"),
 	}
@@ -180,7 +180,7 @@ func setupPull(p *pullFlags) job {
 	col := &collector.Collector{
 		Source:   c.kube(client),
 		Registry: remote,
-		Local:    newLocal(*c.localKind, &local.Node{Client: client, PullNamespace: *pullNS, PullTimeout: *pullTimeout}),
+		Local:    newLocal(*c.localKind, &local.Node{Client: client, PullNamespace: pullNamespace(*pullNS), PullTimeout: *pullTimeout}),
 		OnNew:    policy,
 		DryRun:   *c.dryRun,
 	}

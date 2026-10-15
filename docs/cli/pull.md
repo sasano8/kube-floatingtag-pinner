@@ -35,5 +35,5 @@ pinner pull [flags]
 | `--log-states` | `PINNER_LOG_STATES` | string | `-` | comma-separated states to log (default: all): match, mismatch, not-pulled, error; trigger also not-running |
 | `--namespace` | `PINNER_NAMESPACE` | string | `-` | namespace to watch (default: all) |
 | `--on-new` | `PINNER_ON_NEW` | string | `register` | for images the local cache does not hold: register (pull) \| ignore |
-| `--pull-namespace` | `PINNER_PULL_NAMESPACE` | string | `default` | namespace for the short-lived Pods that make nodes pull images |
+| `--pull-namespace` | `PINNER_PULL_NAMESPACE` | string | `-` | namespace for the short-lived Pods that make nodes pull images (default: the namespace pinner runs in, or "default" outside a cluster) |
 | `--pull-timeout` | `PINNER_PULL_TIMEOUT` | duration | `2m0s` | per-node timeout for a pull |

@@ -169,6 +169,22 @@ pinner collect              # kubeconfig のクラスタで、annotation の付�
 
 `pinner collect` が、クラスタに届いて、表の見出し（`RESOURCE  IMAGE  TRACKED …`）を出せば、インストールと接続は、できている。
 
+### 対象のイメージが非公開レジストリにあるとき
+
+次の「動作確認の手順」の前に、認証を設定しておく（詳しくは「[非公開レジストリ（認証）](#非公開レジストリ認証)」）。認証が要る場所は 2 つ。
+
+- **`pinner` を動かす環境**（`collect`、`pull`、`trigger` が、リモートの digest を調べるため）: 認証情報のファイル（docker の `config.json` と同じ形式）を用意する。
+- **クラスタのノード**（`pull` の Pod が、イメージを pull するため）: ノード側に認証情報を足す。例（単一ノードで、kubelet が読む `config.json` を置く。置き場所は要確認）:
+
+  ```sh
+  # config.json: {"auths": {"ghcr.io": {"auth": "<ユーザー名:トークン を base64 にしたもの>"}}}
+  sudo install -m 600 config.json /var/lib/kubelet/config.json
+  ```
+
+  ほかの方法（kubelet の credential provider、containerd の設定）は、上の節を参照。公開のイメージなら、何も要らない。
+
+認証が足りないと、`collect` / `pull` は `error`（リモートの digest が取れない）、`pull` は `outcome=pull-failed`（ノードの pull が失敗）になる。
+
 ## 動作確認の手順（`app-authorization-demo` で確かめる）
 
 1. **対象にする。** Knative Service の `metadata.annotations` に付ける（`spec.template` ではない。テンプレートを変えると、新しい Revision ができてしまう）。

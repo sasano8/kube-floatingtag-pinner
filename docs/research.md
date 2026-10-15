@@ -165,3 +165,37 @@
 つまり、既存のツールは「イメージをノードに用意しておく」ことが目的で、本プロジェクトは「**可変タグを使って動かしているものを、リモートの最新に揃える**」ことが目的。
 pull の方式（Pod を一時的に作る）は kube-fledged と同じだが、「比べてから pull する」「実行中のものまで揃える」の 2 点は、調べた範囲では、どのツールにも無い。
 OpenKruise の `ImagePullJob` のように、ノードの常駐エージェントが直接 pull する方式は、Pod を作らずに済む代わりに、常駐するものを入れる必要がある（[design.md](./design.md) の pull の仕組みの節で、方式を選んだ理由を述べる）。
+
+## 6. 他のツールは、レジストリの認証をどう扱っているか
+
+調べた範囲では、レジストリに**問い合わせる側**のツールは、その認証を**自分の設定として別に持つ**。ワークロードの pull（kubelet）の認証とは別管理。
+検索で分かった範囲（ドキュメント。実機・ソースでは未確認）。
+
+| ツール | 問い合わせの認証 | pull |
+| --- | --- | --- |
+| [Argo CD Image Updater](https://argocd-image-updater.readthedocs.io/en/latest/basics/authentication/) | 自分の設定（ConfigMap `argocd-image-updater-cm` の `registries.conf`）。取得元は、`secret:`（Secret）、`pullsecret:<namespace>/<名前>`（`docker-registry` 型の Secret）、`env:`（環境変数）、`ext:`（認証情報を標準出力に出すスクリプト） | しない。新しいイメージを Argo CD のアプリケーションへ書き戻し、Argo CD の同期のあとに、kubelet がワークロードの `imagePullSecrets` で pull する |
+| [Flux の `ImageRepository`](https://fluxcd.io/flux/guides/cron-job-image-auth/) | `spec.secretRef`（`docker-registry` 型の Secret）、`spec.serviceAccountName`（その ServiceAccount の `imagePullSecrets`）、`spec.provider`（aws / azure / gcp。クラウドの IAM や Workload Identity）。何も指定しなければ匿名 | しない（Image Updater と同じ） |
+| Keel | 検索では確認できなかった（未確認） | 未確認 |
+
+Image Updater の細かい挙動（[ドキュメント](https://argocd-image-updater.readthedocs.io/en/v0.10.0/configuration/registries/)）:
+
+- 既定では、Image Updater を入れた namespace の Secret しか読めない。
+- 認証情報は、起動時に 1 回読んでキャッシュされる。変更の反映には、再起動が要る。短命のトークンは、`credsexpire`（有効期限）を指定すると、再取得される。
+
+### 本プロジェクトとの比較
+
+| | 問い合わせの認証 | pull の認証 |
+| --- | --- | --- |
+| Image Updater、Flux | 自分の設定（Secret の参照、環境変数、スクリプト、クラウドの IAM） | ワークロード側（kubelet） |
+| 本プロジェクト（`pinner`） | `pinner` を動かす環境から、そのレジストリにログインできていること | ノード側（kubelet の credential provider、ノード上の `config.json`、containerd の設定） |
+
+2 系統に分かれる点は同じ。違いは、本プロジェクトは**自分で pull もする**（pull 用の Pod を作る）こと。上のツールは、問い合わせるだけで、pull は kubelet 任せ。
+そのため、本プロジェクトには、「ノードに pull させる」ための認証（ノード側）も要る。
+
+### 取り入れられる方式（未実装。必要になったら検討する）
+
+- Flux のように、ServiceAccount の `imagePullSecrets` から、問い合わせの認証を作る。
+- Image Updater のように、`docker-registry` 型の Secret を名前で指定して読む。
+- `ext:` のように、スクリプトに認証情報を出させる（短命のトークン向け）。
+
+いずれも、`pinner` がクラスタの Secret（または ServiceAccount）を読む権限が要る。「`pinner` を動かす環境にログインを用意する」手間は減る。

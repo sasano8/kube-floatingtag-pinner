@@ -89,8 +89,8 @@
 - ただし、第一段階の pull 用 Pod は、**ワークロードが動いていないノードも含めて**、Ready な全ノードで pull する。
   ワークロードを動かすための pull より多くなりうる。必要になったら、次を検討する（現状は未実装）:
   pull 用 Pod の同時実行数の制限、ワークロードが動いているノードだけを対象にする。
-- 認証: リモートの digest 取得は、既定のキーチェーン（`~/.docker/config.json` など）を使う。
-  kubelet の pull は、`--pull-secret`（imagePullSecret）を使う。
+- 認証: リモートの digest 取得は、`pinner` が動く環境の認証情報を使う（備考: ggcr の既定のキーチェーン。docker の `config.json` と同じ形式のファイル）。
+  kubelet の pull は、ノード側の認証（credential provider、ノード上の `config.json`、containerd の設定）を基本とし、`--pull-secret`（imagePullSecret）もある。
 
 ## 4. Knative: テンプレートの annotation を変えると、新しい Revision ができるか
 

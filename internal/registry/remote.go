@@ -11,7 +11,7 @@ import (
 )
 
 // Remote asks the registry for the digest only; the image is not downloaded.
-// Credentials come from the default keychain (e.g. ~/.docker/config.json).
+// Credentials come from the default keychain (files in the same format as docker's config.json, among others).
 type Remote struct{}
 
 func (Remote) Digest(ctx context.Context, image string) (string, error) {

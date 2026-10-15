@@ -161,8 +161,9 @@ pull のあとの状態を、pull 用 Pod が報告した digest から求める
 
 ### 認証と名前空間
 
-- `--pull-namespace`（既定 `default`）に Pod を作る。非公開レジストリは `--pull-secret`（同じ名前空間の imagePullSecret）を使う。
-- リモートの digest 取得の認証は、既定のキーチェーン（`~/.docker/config.json` など）を使う。手元から動かす前提。
+- `--pull-namespace`（既定 `default`）に Pod を作る。pull の認証は、Pod の pull の仕組みに従う: 基本はノード側
+  （kubelet の credential provider、kubelet が読むノード上の `config.json`、containerd の認証設定）。ノード側に置けない環境には `--pull-secret`（同じ名前空間の imagePullSecret）もある。
+- リモートの digest 取得の認証は、`pinner` が動く環境の認証情報（備考: ggcr の既定のキーチェーン。docker の `config.json` と同じ形式のファイル）。手元から動かす前提。
 
 ### 必要な権限
 

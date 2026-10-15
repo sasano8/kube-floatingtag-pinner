@@ -475,6 +475,24 @@ internal/local/      ローカルキャッシュ（ノードのイメージス�
 
 設計の詳細（なぜそうしているか、採らなかった案、実機で未確認の前提）は [docs/design.md](./docs/design.md)。
 
+## 非公開レジストリ（認証）
+
+認証が要るのは、2 か所。
+
+- **pull（ノードの pull）**: pull は Pod の仕組みで動くので、認証も **Pod の pull の仕組み**に従う。`pinner` は、pull 用の Pod に何も付けない。
+  ノード側に認証情報を足しておく（次のどれか）。マニフェストには何も書かなくてよい。
+  - **kubelet の credential provider**（kubelet の `--image-credential-provider-config`、`--image-credential-provider-bin-dir`）:
+    クラウドのレジストリ（ECR、GCR、ACR など）向け。固定のユーザー名とパスワードには、プラグインを自作する必要がある。
+  - **kubelet が読む、ノード上の `config.json`**（docker の `config.json` と同じ形式）:
+    固定のユーザー名とパスワードなら、手軽。ノードごとに置く。
+  - **containerd の認証設定**（`registry.configs` の `auth`、または `hosts.toml` の `header`）:
+    containerd のバージョンで書き方が変わる。新しいバージョンでの扱いは要確認。
+
+  ノード側に置けない環境のために、`--pull-secret`（`--pull-namespace` の `imagePullSecret`）もある。
+- **リモートの digest の取得**: `pinner` が動く環境の認証情報を使う（備考: ggcr の既定のキーチェーン。docker の `config.json` と同じ形式のファイルを読む）。
+
+アプリのユーザーが、自分の権限の Secret で pull させたいときに使う `imagePullSecrets` は、`pinner` では扱わない。
+
 ## テスト
 
 - **単体テスト**: `go test ./...`。Kubernetes のクライアントを偽物（fake）に差し替えているので、クラスタは要らない。CI（`main` への push）で実行される。

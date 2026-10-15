@@ -20,7 +20,7 @@ pinner pull [flags]
 | フラグ | 型 | 既定値 | 説明 |
 | --- | --- | --- | --- |
 | `--annotation` | string | `floatingtag-pinner/enabled` | annotation that marks target resources |
-| `--credential` | string | `-` | file in docker config.json format with the registry credentials to look up the remote digest (default: the default keychain) |
+| `--credential` | string | `-` | file in docker config.json format with the registry credentials to look up the remote digest (env PINNER_CREDENTIAL; empty: none; default: the default keychain) |
 | `--daemon` | bool | `false` | keep running: repeat every --interval until stopped (default: run once and exit) |
 | `--debug` | bool | `false` | shorthand for --log-level=debug: also log how each node pulled, and what the nodes and the Pods report |
 | `--digest-length` | int | `12` | hex characters of a sha256 digest to show in the log, then "..." (0 = the whole digest) |

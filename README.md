@@ -157,7 +157,8 @@ go build -o pinner ./cmd/pinner          # → ./pinner（Windows は pinner.exe
 # ビルドせずに試すなら: go run ./cmd/pinner collect
 ```
 
-CI は、あわせて `ghcr.io/sasano8/kube-floatingtag-pinner`（amd64 / arm64 のコンテナイメージ）も公開している。ただし、このイメージでの実行は試していない。
+CI は、あわせて `ghcr.io/sasano8/kube-floatingtag-pinner`（amd64 / arm64 のコンテナイメージ。`Dockerfile`）も公開している。ただし、このイメージでの実行は試していない。
+認証情報の置き場は、「[非公開レジストリ（認証）](#非公開レジストリ認証)」を参照。
 
 ### 動作確認（インストールできたか）
 
@@ -493,7 +494,7 @@ internal/local/      ローカルキャッシュ（ノードのイメージス�
 
 | | 誰がレジストリに接続するか | 認証の設定 |
 | --- | --- | --- |
-| リモートの digest の取得（`HEAD`） | `pinner` 自身 | `--credential <ファイル>`（`pull` のフラグ）。ファイルは、docker の `config.json` と同じ形式。省略すると、`pinner` を動かす環境の認証（既定のキーチェーン） |
+| リモートの digest の取得（`HEAD`） | `pinner` 自身 | `--credential <ファイル>`（`pull` のフラグ）、または環境変数 `PINNER_CREDENTIAL`。ファイルは、docker の `config.json` と同じ形式。省略すると、`pinner` を動かす環境の認証（既定のキーチェーン） |
 | pull（ノードへの取得） | pull 用の Pod（kubelet） | ノード側に認証情報を足す（下） |
 
 - **pull の認証**: pull は Pod の仕組みで動くので、認証も **Pod の pull の仕組み**に従う。`pinner` は、pull 用の Pod に何も付けない。
@@ -504,6 +505,16 @@ internal/local/      ローカルキャッシュ（ノードのイメージス�
     固定のユーザー名とパスワードなら、手軽。ノードごとに置く。
   - **containerd の認証設定**（`registry.configs` の `auth`、または `hosts.toml` の `header`）:
     containerd のバージョンで書き方が変わる。新しいバージョンでの扱いは要確認。
+- **`--credential` の決まり方**（どれも、`pull` のとき）:
+  1. `--credential <ファイル>`。空（`--credential=`）なら、認証なし。
+  2. なければ、環境変数 `PINNER_CREDENTIAL`。空文字なら、認証なし（既定の置き場も見ない）。
+  3. なければ、**既定の置き場**（コンテナイメージだけが持つ: `/credential/config.json`）。**無ければ、認証なしとして扱う**（エラーにしない）。
+  
+  1 と 2 で、**存在しないファイルを指したら、エラー**にする（パスの打ち間違いや、Secret のマウント忘れに気づけるように）。
+  エラーにならないのは、既定の置き場が無いときだけ。
+- **コンテナイメージ**（`ghcr.io/sasano8/kube-floatingtag-pinner`）では、Secret を `/credential/config.json` にマウントすれば、指定なしで使われる。
+  `docker-registry` 型の Secret のキーは `.dockerconfigjson` なので、`items` で `config.json` に写してマウントする
+  （`items: [{key: .dockerconfigjson, path: config.json}]`）。別の場所なら、`PINNER_CREDENTIAL` で指す。
 - **ノードの `config.json` を、`--credential` にも使う**と、認証の元が 1 つになる（`pinner` をそのノード上で動かす場合）。
   例: `pinner pull --credential /var/lib/kubelet/config.json`。
 

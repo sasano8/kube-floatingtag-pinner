@@ -128,6 +128,7 @@ func (j job) run() {
 // pullFlags are the flags of pull.
 type pullFlags struct {
 	*common
+	fs          *flag.FlagSet
 	onNew       *string
 	pullNS      *string
 	pullTimeout *time.Duration
@@ -136,11 +137,12 @@ type pullFlags struct {
 
 func registerPull(fs *flag.FlagSet) *pullFlags {
 	return &pullFlags{
+		fs:          fs,
 		common:      registerCommon(fs, "report what would be pulled, without pulling"),
 		onNew:       fs.String("on-new", string(collector.OnNewRegister), "for images the local cache does not hold: register (pull) | ignore"),
 		pullNS:      fs.String("pull-namespace", "default", "namespace for the short-lived Pods that make nodes pull images"),
 		pullTimeout: fs.Duration("pull-timeout", 2*time.Minute, "per-node timeout for a pull"),
-		credential:  fs.String("credential", "", "file in docker config.json format with the registry credentials to look up the remote digest (default: the default keychain)"),
+		credential:  fs.String("credential", "", "file in docker config.json format with the registry credentials to look up the remote digest (env "+credentialEnv+"; empty: none; default: the default keychain)"),
 	}
 }
 
@@ -160,12 +162,19 @@ func setupPull(p *pullFlags) job {
 		fatal(err)
 	}
 	remote := registry.Remote{}
-	if *p.credential != "" {
-		keychain, err := registry.FileKeychain(*p.credential)
+	flagSet := false
+	p.fs.Visit(func(f *flag.Flag) { flagSet = flagSet || f.Name == "credential" })
+	credFile, credSource, err := resolveCredential(*p.credential, flagSet, os.LookupEnv)
+	if err != nil {
+		fatal(err)
+	}
+	if credFile != "" {
+		keychain, err := registry.FileKeychain(credFile)
 		if err != nil {
 			fatal(err)
 		}
 		remote.Keychain = keychain
+		slog.Debug("registry credentials", "file", credFile, "from", credSource)
 	}
 	client := newClient(*c.kubeconfig)
 	col := &collector.Collector{

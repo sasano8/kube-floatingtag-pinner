@@ -110,6 +110,8 @@ digest だけでタグが付いていないものは見ない（使われると�
 
 ## 5. pull の仕組み [実装済み・実機で確認済み]
 
+他の方式（ノードの常駐エージェントが直接 pull する、DaemonSet で pull するなど）との比較は、[research.md](./research.md) の 5 章を参照。
+
 ### 方式
 
 kubelet に pull させるため、Ready な各ノードに、そのノード固定（`spec.nodeName`）の短命な Pod を作る。
@@ -159,8 +161,16 @@ pull のあとの状態を、pull 用 Pod が報告した digest から求める
 
 ### 認証と名前空間
 
-- `--pull-namespace`（既定 `default`）に Pod を作る。非公開レジストリは `--pull-secret`（同じ名前空間の imagePullSecret）を使う。
-- リモートの digest 取得の認証は、既定のキーチェーン（`~/.docker/config.json` など）を使う。手元から動かす前提。
+- `--pull-namespace`（既定 `default`）に Pod を作る。pull の認証は、Pod の pull の仕組みに従う: 基本はノード側
+  （kubelet の credential provider、kubelet が読むノード上の `config.json`、containerd の認証設定）。`imagePullSecrets` は扱わない（アプリのユーザーが、自分の権限の Secret で pull させるための仕組みで、運用する側のツールには合わない）。
+- リモートの digest 取得の認証（`pinner` 自身がレジストリに接続する）は、pull の認証（kubelet が接続する）とは**別**。
+  `--credential <ファイル>`（`pull` のフラグ。docker の `config.json` と同じ形式。`registry.FileKeychain`）で渡す。そのファイルにないレジストリは、匿名。
+  省略すると、既定のキーチェーン。ノードの `config.json` を指定すれば、認証の元を 1 つにできる（`pinner` をそのノード上で動かす場合）。
+- `--credential` は環境変数 `PINNER_CREDENTIAL` でも渡せる。決まり方（`resolveCredential`）: ①フラグ、②環境変数、③なし（既定のキーチェーン）。
+  **フラグと環境変数が指すファイルが無ければ、エラー**（打ち間違いや、Secret のマウント忘れを検知する）。空（設定されていて空文字）は、認証なし。
+- コンテナイメージは、`ENV PINNER_CREDENTIAL=/credential/config.json` を持ち、そのパスに、認証情報のない JSON（`{"auths":{}}`）を置く。
+  バイナリに「既定の置き場」という特別な扱いは持たせない: 指定されたファイルは必ず存在する、という規則に例外が要らず、
+  何もマウントしないイメージも、エラーにならずに動く。利用者は、そのパスにファイルをマウントして置き換える。
 
 ### 必要な権限
 
@@ -227,6 +237,17 @@ collect ──▶ pull    （対象のイメージを、リモートとローカ
 
 - Deployment / StatefulSet / DaemonSet: Pod の `imageID`。タグは Pod の image 欄で分かる。
 - Knative: Revision の `imageDigest`。Pod の image は digest で固定されていて、タグは Revision / ksvc の spec にある。
+
+### 実行中の Pod
+
+Pod が「そのイメージで動いている」と数えるのは、次をすべて満たすとき（`source.inUse`、テストは `TestRunningPodStates`）。
+
+- 削除中でない（`deletionTimestamp` が無い）。ロールアウトが終わる間、古い Pod は終了処理中のまま一覧に残り、古い digest を持つ。これを数えると、`mismatch` の誤報になる（e2e で見つかった）。
+- 終わっていない（`status.phase` が `Succeeded` / `Failed` でない）。Job が残した Pod や、退避（evict）された Pod は、もう動いていない。
+- そのイメージの `containerStatuses` に、repo の digest つきの `imageID` がある。まだ pull されていない（`imageID` が空）、または digest が無い（イメージ ID だけ）ものは、比べる相手がないので数えない。
+
+`pinner` が Pod から読むのは、`deletionTimestamp`、`status.phase`、`spec.nodeName`、`containerStatuses[].image` / `imageID` だけ。
+状態の洗い出しは、この 5 項目の組み合わせに限る。e2e などで新しい状態が見つかったら、この定義と `TestRunningPodStates` に足す。
 
 Pod から取るのは「タグ」と「digest」の両方。タグはどのローカルのエントリと比べるかの鍵で、比べるのは digest 同士。
 
@@ -386,6 +407,15 @@ Knative は、Revision を作ると、そのときリモートに問い合わせ
 
 ## 9. 検討中のこと
 
+- **`--pull-via cri`（仮。残課題）**: `pinner` をノード上で動かし、containerd に CRI（gRPC のソケット）で直接、pull とローカルの digest の読み取りをさせる。
+  いまの方式（`--pull-via kubelet` にあたる。pull 用の Pod を作り、kubelet に任せる）との切り替えを想定する。
+  - 利点: 認証の元が 1 つ（`--credential` のファイルを、digest の問い合わせにも、CRI の `PullImage` の認証にも使う）。Pod も `--pull-namespace` も要らない。
+    CRI の `ImageStatus` で、ローカルの digest を即時に読める（`Node.status.images` の数分の遅れがなくなる）。
+  - 制約: そのノードの上で動かす必要がある（複数ノードなら、ノードごと）。ソケットへの権限が要る。CRI の gRPC クライアントと、テスト用の偽の CRI サーバーの実装が要る。
+    そのノードの Pod だけを比べる（ほかのノードの Pod は比べない）扱いが要る。
+  - kubelet の部品を流用するのではなく、kubelet と同じ入口（CRI）から、`pinner` が直接 containerd に頼む。認証の処理は `pinner` が持つ（`config.json` を読んで、要求に付ける）。
+  - 軸は、`--local`（ローカルとは何か。いまは `node` のみ）とは別で、「ノードのストアにどう触るか」の選択。
+
 - 結果の出力先の追加（Event、メトリクス。現状はログのみ）。
 - クラスタの中で動かす構成（CronJob / Deployment、RBAC、operator 化）は、いまは考えない。手元から `kubeconfig` で動かす前提。
 - pull 用 Pod の同時実行数の制限や、ワークロードが動いているノードだけを対象にすること（[research.md](./research.md) の rate limit の節）。
@@ -412,7 +442,7 @@ Knative は、Revision を作ると、そのときリモートに問い合わせ
 | envtest | 本物の `kube-apiserver` と `etcd` だけを起動する（kubelet もノードも無い） | 使わない。pull 用 Pod、`Node.status.images` は kubelet が無いと確かめられないため |
 | e2e | kind（本物の kubelet と containerd）と、CI の中のローカルレジストリ | `test/e2e/run.sh` と `.github/workflows/e2e.yml`。**スキップが既定**（変数 `RUN_E2E` か手動で実行）。未実行 |
 
-- e2e はローカルレジストリを使う: 同じタグに別の内容を 2 回 push すれば「リモートのタグが動いた」状況を作れる。rate limit の影響も受けない。認証が要る場合（`--pull-secret`）は、htpasswd 付きの 2 つ目のレジストリ（`localhost:5002`）を建てて確かめる。
+- e2e はローカルレジストリを使う: 同じタグに別の内容を 2 回 push すれば「リモートのタグが動いた」状況を作れる。rate limit の影響も受けない。認証が要る場合は、htpasswd 付きの 2 つ目のレジストリ（`localhost:5002`）を建て、kind のノードに、kubelet が読む `config.json` を置いて確かめる。
   kind のノードの containerd に、`localhost:5001` をローカルレジストリへ向ける設定を入れる（kind の公式の手順）。
 - ノードの `status.images` の更新の遅れ（数分。pull のあとの状態を、pull 用 Pod が報告した digest から求める理由）は、kind でも再現されるはず。
   e2e は、ローカルの状態を読むステップの前に、`status.images` に反映されるまで待つ（`pull --dry-run` が `match` になるまで繰り返す）。
@@ -431,7 +461,7 @@ Knative は、Revision を作ると、そのときリモートに問い合わせ
    個別の digest を引いて比べる方式に切り替える。アーキごとの digest は取れるが、今は使っていない。
    タグ全体の digest は、どのアーキが変わっても変わるので、「タグが動いたか」の検知は、これで足りる。
 4. （確認済み）Knative: ksvc の `spec.template` への annotation で、新しい Revision ができ、タグが解決し直されること。
-5. 非公開レジストリでの認証（digest 取得と pull）。rate limit は [research.md](./research.md) のとおり、digest の取得は数えられない。
+5. 非公開レジストリでの認証（digest 取得と pull）。e2e に、認証つきレジストリのシナリオがあるが、未実行。rate limit は [research.md](./research.md) のとおり、digest の取得は数えられない。
 6. `Node.status.images` が 1 ノード 50 件まで（kubelet の既定）のため、全ノードの和集合で見ても、載らないことがある。
 
 ## 用語

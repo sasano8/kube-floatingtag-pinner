@@ -152,10 +152,12 @@ step "trigger with on-mismatch=rollout: a new rollout starts (only an annotation
 run_pinner trigger || fail "trigger exited non-zero"
 expect 'msg="trigger mismatch"'
 expect 'trigger action requested.*action=rollout'
-kubectl -n "$NS" get deployment app -o jsonpath='{.spec.template.metadata.annotations}' | grep -q 'floatingtag-pinner/restartedAt' ||
-  fail "the Pod template must carry the rollout annotation"
-[ "$(kubectl -n "$NS" get deployment app -o jsonpath='{.spec.template.spec.containers[0].image}')" = "$IMAGE" ] ||
-  fail "the image field must not be touched"
+template_annotations=$(kubectl -n "$NS" get deployment app -o jsonpath='{.spec.template.metadata.annotations}')
+case "$template_annotations" in *floatingtag-pinner/restartedAt*) ;; *)
+  fail "the Pod template must carry the rollout annotation (got: ${template_annotations:-none})" ;;
+esac
+image_now=$(kubectl -n "$NS" get deployment app -o jsonpath='{.spec.template.spec.containers[0].image}')
+[ "$image_now" = "$IMAGE" ] || fail "the image field must not be touched (got: $image_now)"
 kubectl -n "$NS" rollout status deployment/app --timeout=180s
 
 step "trigger again: the new Pod runs the local digest -> match, and nothing more is requested"
@@ -254,7 +256,7 @@ run_in e2e-multi trigger || fail "trigger exited non-zero"
 expect 'msg="trigger match"'
 expect_not 'msg="trigger mismatch"'
 
-step "private registry: pull needs --pull-secret"
+step "private registry: pull works when the nodes hold the credentials (kubelet reads config.json)"
 AUTH_PORT=5002
 AUTH_NAME=kind-registry-auth
 PRIVATE="localhost:${AUTH_PORT}/e2e/private:latest"
@@ -270,19 +272,32 @@ for node in $(kind get nodes --name "$CLUSTER"); do
   printf '[host."http://%s:5000"]\n' "$AUTH_NAME" |
     docker exec -i "$node" cp /dev/stdin "/etc/containerd/certs.d/localhost:${AUTH_PORT}/hosts.toml"
 done
-export DOCKER_CONFIG="${WORK}/docker" # where pinner (and docker) find the registry's credentials
-docker login "localhost:${AUTH_PORT}" -u e2e -p secret >/dev/null
-push_to "$PRIVATE" v1
+CRED_DIR="${WORK}/docker" # a config.json of its own: pinner gets it only through --credential
+DOCKER_CONFIG="$CRED_DIR" docker login "localhost:${AUTH_PORT}" -u e2e -p secret >/dev/null
+DOCKER_CONFIG="$CRED_DIR" push_to "$PRIVATE" v1
 new_app e2e-private "$PRIVATE" 0
-kubectl -n e2e-private create secret docker-registry regcred \
-  --docker-server="localhost:${AUTH_PORT}" --docker-username=e2e --docker-password=secret
 
-# the registry answers pinner (credentials from DOCKER_CONFIG), but the node has no credentials to pull with
-if run_in e2e-private pull --pull-namespace e2e-private --pull-timeout 90s; then
-  fail "pull without --pull-secret must fail"
+# no credentials for pinner: the digest cannot be looked up
+if run_in e2e-private pull --pull-namespace e2e-private; then
+  fail "pull must fail while pinner has no credentials"
+fi
+expect 'msg="pull error"'
+expect_not 'outcome=pull-failed' # it never got as far as pulling
+
+# pinner has them (--credential), but the nodes have no credentials to pull with
+if run_in e2e-private pull --pull-namespace e2e-private --pull-timeout 90s --credential "${CRED_DIR}/config.json"; then
+  fail "pull must fail while the nodes have no credentials"
 fi
 expect 'msg="pull error".*state=not-pulled.*outcome=pull-failed'
-run_in e2e-private pull --pull-namespace e2e-private --pull-secret regcred || fail "pull with --pull-secret exited non-zero"
+
+# the credentials go on the nodes, where kubelet reads them (nothing is added to the Pod or its namespace)
+for node in $(kind get nodes --name "$CLUSTER"); do
+  docker cp "${CRED_DIR}/config.json" "${node}:/var/lib/kubelet/config.json"
+  docker exec "$node" systemctl restart kubelet
+done
+kubectl wait --for=condition=Ready node --all --timeout=120s
+run_in e2e-private pull --pull-namespace e2e-private --credential "${CRED_DIR}/config.json" ||
+  fail "pull exited non-zero with credentials on pinner and on the nodes"
 expect 'msg="pull not-pulled".*outcome=pulled'
 expect 'msg="pull match".*via=pulling'
 kubectl -n e2e-private get pods -l app.kubernetes.io/managed-by=floatingtag-pinner -o name | grep -q . &&

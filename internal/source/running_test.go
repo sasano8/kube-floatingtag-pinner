@@ -4,7 +4,9 @@ import (
 	"context"
 	"reflect"
 	"testing"
+	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -40,11 +42,14 @@ func fakeClient(objs ...runtime.Object) *dynamicfake.FakeDynamicClient {
 
 func TestRunningPods(t *testing.T) {
 	web := map[string]interface{}{"app": "web"}
+	terminating := pod("web-5", "n1", web, "ghcr.io/o/app:latest", "ghcr.io/o/app@sha256:old") // being deleted: skipped
+	terminating.SetDeletionTimestamp(&metav1.Time{Time: time.Now()})
 	client := fakeClient(
 		pod("web-1", "n1", web, "ghcr.io/o/app:latest", "ghcr.io/o/app@sha256:aaa"),
 		pod("web-2", "n2", web, "ghcr.io/o/app:latest", "ghcr.io/o/app@sha256:bbb"),
 		pod("web-3", "n2", web, "ghcr.io/o/app:latest", "sha256:onlyanid"),                // no repo digest: skipped
 		pod("web-4", "n2", web, "ghcr.io/o/sidecar:latest", "ghcr.io/o/sidecar@sha256:s"), // other image
+		terminating,
 		pod("db-1", "n1", map[string]interface{}{"app": "db"}, "ghcr.io/o/app:latest", "ghcr.io/o/app@sha256:zzz"),
 	)
 	r := trigger.Resource{Kind: "Deployment", Namespace: "ns", Name: "web", Selector: "app=web"}
@@ -103,4 +108,54 @@ func TestResourcesCarryActionSelectorAndRevision(t *testing.T) {
 	if k := byName["k"]; k.Revision != "k-00003" || len(k.Actions) != 0 {
 		t.Fatalf("%+v", k)
 	}
+}
+
+// TestRunningPodStates: which Pods count as "running the image" (docs/design.md, 実行中の Pod).
+func TestRunningPodStates(t *testing.T) {
+	const img, id = "ghcr.io/o/app:latest", "ghcr.io/o/app@sha256:aaa"
+	web := map[string]interface{}{"app": "web"}
+	cases := []struct {
+		name  string
+		shape func(*unstructured.Unstructured)
+		want  bool
+	}{
+		{"running", func(p *unstructured.Unstructured) { setPhase(p, "Running") }, true},
+		{"phase not reported yet", func(p *unstructured.Unstructured) {}, true},
+		{"pending, digest known (e.g. a sidecar still starting)", func(p *unstructured.Unstructured) { setPhase(p, "Pending") }, true},
+		{"deleting (the old Pod while a rollout finishes)", func(p *unstructured.Unstructured) {
+			setPhase(p, "Running")
+			p.SetDeletionTimestamp(&metav1.Time{Time: time.Now()})
+		}, false},
+		{"succeeded (what a Job leaves behind)", func(p *unstructured.Unstructured) { setPhase(p, "Succeeded") }, false},
+		{"failed (evicted, or a Job that failed)", func(p *unstructured.Unstructured) { setPhase(p, "Failed") }, false},
+		{"image not pulled yet: no imageID", func(p *unstructured.Unstructured) {
+			setPhase(p, "Pending")
+			setImageID(p, "")
+		}, false},
+		{"imageID without a repo digest", func(p *unstructured.Unstructured) { setImageID(p, "sha256:onlyanid") }, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := pod("web-1", "n1", web, img, id)
+			c.shape(p)
+			r := trigger.Resource{Kind: "Deployment", Namespace: "ns", Name: "web", Selector: "app=web"}
+			got, err := (&source.KubeRunning{Client: fakeClient(p)}).Running(context.Background(), r, img)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (len(got) == 1) != c.want {
+				t.Fatalf("counted=%v want %v (got %+v)", len(got) == 1, c.want, got)
+			}
+		})
+	}
+}
+
+func setPhase(p *unstructured.Unstructured, phase string) {
+	_ = unstructured.SetNestedField(p.Object, phase, "status", "phase")
+}
+
+func setImageID(p *unstructured.Unstructured, id string) {
+	css, _, _ := unstructured.NestedSlice(p.Object, "status", "containerStatuses")
+	css[0].(map[string]interface{})["imageID"] = id
+	_ = unstructured.SetNestedSlice(p.Object, css, "status", "containerStatuses")
 }

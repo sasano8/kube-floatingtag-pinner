@@ -157,7 +157,8 @@ go build -o pinner ./cmd/pinner          # → ./pinner（Windows は pinner.exe
 # ビルドせずに試すなら: go run ./cmd/pinner collect
 ```
 
-CI は、あわせて `ghcr.io/sasano8/kube-floatingtag-pinner`（amd64 / arm64 のコンテナイメージ）も公開している。ただし、このイメージでの実行は試していない。
+CI は、あわせて `ghcr.io/sasano8/kube-floatingtag-pinner`（amd64 / arm64 のコンテナイメージ。`Dockerfile`）も公開している。ただし、このイメージでの実行は試していない。
+認証情報の置き場は、「[非公開レジストリ（認証）](#非公開レジストリ認証)」を参照。
 
 ### 動作確認（インストールできたか）
 
@@ -168,6 +169,18 @@ pinner collect              # kubeconfig のクラスタで、annotation の付�
 ```
 
 `pinner collect` が、クラスタに届いて、表の見出し（`RESOURCE  IMAGE  TRACKED …`）を出せば、インストールと接続は、できている。
+
+### 対象のイメージが非公開レジストリにあるとき
+
+次の「動作確認の手順」の前に、認証を設定しておく（詳しくは「[非公開レジストリ（認証）](#非公開レジストリ認証)」）。
+
+- **クラスタのノード**（`pull` の Pod が、イメージを pull するため）: ノード側に認証情報を足す。kubelet が読む `config.json` なら、
+  `/var/lib/kubelet/config.json` を編集する（置き場所は要確認）。設定の仕方は、公式のドキュメントを参照:
+  [Configuring nodes to authenticate to a private registry](https://kubernetes.io/docs/concepts/containers/images/#configuring-nodes-to-authenticate-to-a-private-registry)、
+  [kubelet credential provider](https://kubernetes.io/docs/tasks/administer-cluster/kubelet-credential-provider/)。
+- **`pinner` が、リモートの digest を問い合わせるとき**: `pull` の `--credential <ファイル>`（docker の `config.json` と同じ形式）。ノードの `config.json` を、そのまま指定してもよい。
+
+公開のイメージなら、何も要らない。認証が足りないと、`collect` / `pull` は `error`（リモートの digest が取れない）、`pull` は `outcome=pull-failed`（ノードの pull が失敗）になる。
 
 ## 動作確認の手順（`app-authorization-demo` で確かめる）
 
@@ -253,7 +266,7 @@ set_latest v1
 ```
 
 ghcr のパッケージは、初回は private なので、GitHub の Packages → `pinner-test` → Package settings → Change visibility → **Public** にする
-（private のままなら、imagePullSecret を作って、Deployment と `--pull-secret` に指定する）。
+（private のままなら、ノード側に認証情報を足す。「非公開レジストリ（認証）」の節を参照）。
 
 **2. Deployment を作る**（`imagePullPolicy: IfNotPresent`。Pod が作り直されたときに、ノードのタグが使われることを確かめるため）
 
@@ -475,13 +488,53 @@ internal/local/      ローカルキャッシュ（ノードのイメージス�
 
 設計の詳細（なぜそうしているか、採らなかった案、実機で未確認の前提）は [docs/design.md](./docs/design.md)。
 
+## 非公開レジストリ（認証）
+
+認証が要るのは、**別々の 2 か所**。それぞれ、別に設定する。
+
+| | 誰がレジストリに接続するか | 認証の設定 |
+| --- | --- | --- |
+| リモートの digest の取得（`HEAD`） | `pinner` 自身 | `--credential <ファイル>`（`pull` のフラグ）、または環境変数 `PINNER_CREDENTIAL`。ファイルは、docker の `config.json` と同じ形式。省略すると、`pinner` を動かす環境の認証（既定のキーチェーン） |
+| pull（ノードへの取得） | pull 用の Pod（kubelet） | ノード側に認証情報を足す（下） |
+
+- **pull の認証**: pull は Pod の仕組みで動くので、認証も **Pod の pull の仕組み**に従う。`pinner` は、pull 用の Pod に何も付けない。
+  ノード側に認証情報を足しておく（次のどれか）。マニフェストには何も書かなくてよい。
+  - **kubelet の credential provider**（kubelet の `--image-credential-provider-config`、`--image-credential-provider-bin-dir`）:
+    クラウドのレジストリ（ECR、GCR、ACR など）向け。固定のユーザー名とパスワードには、プラグインを自作する必要がある。
+  - **kubelet が読む、ノード上の `config.json`**（docker の `config.json` と同じ形式）:
+    固定のユーザー名とパスワードなら、手軽。ノードごとに置く。
+  - **containerd の認証設定**（`registry.configs` の `auth`、または `hosts.toml` の `header`）:
+    containerd のバージョンで書き方が変わる。新しいバージョンでの扱いは要確認。
+- **`--credential` の決まり方**（`pull` のとき）:
+  1. `--credential <ファイル>`。空（`--credential=`）なら、認証なし。
+  2. なければ、環境変数 `PINNER_CREDENTIAL`。空文字なら、認証なし。
+  3. どちらもなければ、認証なし（`pinner` を動かす環境の既定の認証を使う）。
+  
+  1 と 2 で、**存在しないファイルを指したら、エラー**にする（パスの打ち間違いや、Secret のマウント忘れに気づけるように）。
+- **コンテナイメージ**（`ghcr.io/sasano8/kube-floatingtag-pinner`）は、`PINNER_CREDENTIAL=/credential/config.json` を持ち、
+  そのパスに、**認証情報の入っていない JSON**（`{"auths":{}}`）を置いてある。そのため、何もマウントしなくても、エラーにならない（認証なしで動く）。
+  利用者は、**そのパスに、認証情報のファイルをマウントする**だけでよい。
+  - Secret をディレクトリとしてマウントする: `docker-registry` 型の Secret のキーは `.dockerconfigjson` なので、`items` で
+    `config.json` に写す（`items: [{key: .dockerconfigjson, path: config.json}]`）。`/credential` 全体が置き換わるので、`config.json` のキーが無いと、エラーになる。
+  - ファイルを 1 つだけマウントする（`subPath`）: イメージの中のファイルを置き換える。
+  - 別の場所に置くなら、`PINNER_CREDENTIAL` でそのパスを指す。空にすると、認証なし。
+- **ノードの `config.json` を、`--credential` にも使う**と、認証の元が 1 つになる（`pinner` をそのノード上で動かす場合）。
+  例: `pinner pull --credential /var/lib/kubelet/config.json`。
+
+`imagePullSecrets`（Pod に結び付ける Secret）は、`pinner` では扱わない。アプリのユーザーが、自分の権限の Secret で pull させるための仕組みで、
+運用する側のツールである `pinner` は、ノード側の認証に任せる。
+
+**残課題**: `pinner` をノード上で動かし、containerd に CRI で直接 pull させる方式（`--pull-via cri`（仮））。
+認証が 1 つのファイルで済み、`Node.status.images` の遅れ（数分）もなくなるが、ノード上での実行が前提で、実装が増える。
+[docs/design.md](./docs/design.md) の「検討中のこと」を参照。
+
 ## テスト
 
 - **単体テスト**: `go test ./...`。Kubernetes のクライアントを偽物（fake）に差し替えているので、クラスタは要らない。CI（`main` への push）で実行される。
 - **e2e テスト**（[test/e2e/run.sh](./test/e2e/run.sh)）: kind（本物の kubelet と containerd）と、CI の中のローカルレジストリで、
   `pull`（`--dry-run`、状態の変化、ログのオプション）と `trigger`（`rollout`、`delete-pods`）に加えて、
   `error`、`not-pulled`、`not-running`、コンテナが自分で再起動して `mismatch` が消える場合、マルチ arch のイメージ（index の digest）、
-  認証つきのレジストリ（`--pull-secret` あり・なし）を、本物のクラスタで確かめる。
+  認証つきのレジストリ（ノード側に認証情報があるときと、ないとき）を、本物のクラスタで確かめる。
   レジストリを自前で建てるので、タグを自由に動かせる（Docker Hub の rate limit にも依存しない）。
   - **いまはスキップされる**（[.github/workflows/e2e.yml](./.github/workflows/e2e.yml)）。リポジトリの変数 `RUN_E2E` を `true` にすると、
     `main` への push と pull request で動く。手動（Actions の `e2e` → Run workflow）でも、変数に関係なく実行できる。
@@ -508,3 +561,4 @@ Keel・Knative 本体・Argo CD Image Updater では、ksvc の `latest` 追従�
 - コマンド名（`pull` / `trigger`）は決定。両方を続けて行う `sync` は仮。
 - `sync`（`pull` → `trigger`）。
 - 任意のレジストリを同期先にする `--local`（`registry`）。
+- ノード上で CRI を直接使う `--pull-via cri`（仮）。上の「非公開レジストリ（認証）」と、[docs/design.md](./docs/design.md) の「検討中のこと」を参照。

@@ -89,8 +89,8 @@
 - ただし、第一段階の pull 用 Pod は、**ワークロードが動いていないノードも含めて**、Ready な全ノードで pull する。
   ワークロードを動かすための pull より多くなりうる。必要になったら、次を検討する（現状は未実装）:
   pull 用 Pod の同時実行数の制限、ワークロードが動いているノードだけを対象にする。
-- 認証: リモートの digest 取得は、既定のキーチェーン（`~/.docker/config.json` など）を使う。
-  kubelet の pull は、`--pull-secret`（imagePullSecret）を使う。
+- 認証: リモートの digest 取得は、`pinner` が動く環境の認証情報を使う（備考: ggcr の既定のキーチェーン。docker の `config.json` と同じ形式のファイル）。
+  kubelet の pull は、ノード側の認証（credential provider、ノード上の `config.json`、containerd の設定）に任せる（`pinner` は `imagePullSecrets` を扱わない）。
 
 ## 4. Knative: テンプレートの annotation を変えると、新しい Revision ができるか
 
@@ -130,3 +130,72 @@
   確認できていなかったが、上の 4 つの根拠をつなげた推論が、実機で裏付けられた。e2e には、Knative の確認を入れていない（Knative Serving のインストールが重いため）。
 - 注意: `kubectl apply`（クライアント側の apply）で annotation を足すと、`last-applied-configuration` との衝突が起きうる
   （[knative/client#964](https://github.com/knative/client/pull/964)）。このツールは `patch`（JSON merge patch）で足すので、影響しない見込み。
+
+## 5. ノードへの pull（イメージの事前取得）に関する既存ツール
+
+「Pod を作らずに、ノードにイメージを pull させる」ための標準の API は、Kubernetes には無い（pull は kubelet と containerd の仕事で、入口は「そのイメージを使う Pod」だけ）。
+同じ目的のツールは、ノードにイメージを持たせる仕組みを、それぞれ別の形で作っている。**検索で分かった範囲**（ドキュメント・README・記事。実機では未検証）。
+
+| ツール | 仕組み | `latest` などの可変タグ | 備考 |
+| --- | --- | --- | --- |
+| [kube-fledged](https://github.com/senthilrch/kube-fledged) | `ImageCache` という CRD でイメージの一覧を宣言する。コントローラーが、ノードごとに **Job の Pod** を作って pull する（[記事](https://itnext.io/kube-fledged-cache-container-images-in-kubernetes-7880a00bab91)） | タグなし・`latest` は、更新（refresh）のたびに必ず pull し直す（[v0.7.0](https://github.com/senthilrch/kube-fledged/releases/tag/v0.7.0)）。refresh の間隔は既定 15 分 | `nodeSelector` で対象のノードを絞れる。pull の失敗の判定は、既定 5 分 |
+| [OpenKruise](https://openkruise.io/) の `ImagePullJob` | CRD でイメージとノードを指定する。ノードに常駐する **`kruise-daemon`**（DaemonSet）が pull する（[解説](https://blog.nashtechglobal.com/openkruise-creating-an-imagepulljob/)） | 未確認 | Pod を作らない方式。`ImagePullJobGate` の有効化が要る。Virtual Kubelet のノードでは動かない。**デーモンが CRI をどう呼ぶかは、ソース（`pkg/daemon`）を確認していない** |
+| [kubernetes-image-puller](https://eclipse.dev/che/docs/next/administration-guide/caching-images-for-faster-workspace-start/)（Eclipse Che） | `KubernetesImagePuller` で、イメージの一覧を指定する。**DaemonSet** が、各ノードで、そのイメージを動かして pull させる | 未確認（固定のイメージの事前 pull が目的） | Che に依存しない（Kubernetes / OpenShift 共通）。メモリは、イメージ数 × ノード数で見積もる |
+| [Spegel](https://spegel.dev/) | DaemonSet で、ノード間の **P2P のレジストリミラー**。containerd が先にミラーを見て、ほかのノードが持つレイヤーをもらう（[CoreWeave のドキュメント](https://docs.coreweave.com/changelog/release-notes/cks-spegel-mirror)） | `latest` は、ノード間で共有しない（ミラーを通さず、元のレジストリへ行く。[K3s のドキュメント](https://docs.k3s.io/installation/registry-mirror)の記述） | pull を速くする仕組みで、「ノードに持たせる」ことが目的ではない。K3s / RKE2 には、組み込みのミラーがある |
+
+### 本プロジェクトとの目的の比較
+
+**共通する目的**
+
+- ノードのイメージの保存先（ローカルキャッシュ）に、イメージを持たせる。kube-fledged は、`latest` を定期的に pull し直すので、
+  第一段階（リモート → ノード）に近いことをする。
+- 追加の設定なしで、ノードごとの pull を、Kubernetes の仕組みの上で行う。
+
+**異なる目的**
+
+| 観点 | 本プロジェクト（pinner） | 上のツール |
+| --- | --- | --- |
+| 何を宣言するか | イメージの一覧は宣言しない。**動いているリソース**（アノテーションを付けたもの）から、対象のイメージを求める | 持たせたいイメージの一覧を、CRD などで宣言する |
+| いつ pull するか | リモートのタグの digest と、ノードのものを**比べて、違うときだけ** pull する（`HEAD` で digest だけ取る） | 定期的に、または一覧にあるものを、無条件で pull する（kube-fledged の `latest` は、毎回 pull し直す） |
+| 実行中のものとの関係 | **実行中の Pod / Revision の digest と、ノードのものを比べて**、違えばアクション（`rollout`、`delete-pods`）を依頼する（第二段階） | 事前 pull まで。実行中のものは、作り直さない |
+| Knative | Revision の `imageDigest` を比べ、`rollout` で新しい Revision を作る | 対象外 |
+| ノードに常駐するもの | 無し（Pod を一時的に作るだけ。特権も要らない） | DaemonSet や CRD、コントローラーが要る |
+| 目的 | 可変タグを追従する開発環境で、「いま動いているものが、リモートの最新と食い違う」ことを知り、揃える | 起動を速くする（イメージを先に持たせる）、帯域の節約 |
+
+つまり、既存のツールは「イメージをノードに用意しておく」ことが目的で、本プロジェクトは「**可変タグを使って動かしているものを、リモートの最新に揃える**」ことが目的。
+pull の方式（Pod を一時的に作る）は kube-fledged と同じだが、「比べてから pull する」「実行中のものまで揃える」の 2 点は、調べた範囲では、どのツールにも無い。
+OpenKruise の `ImagePullJob` のように、ノードの常駐エージェントが直接 pull する方式は、Pod を作らずに済む代わりに、常駐するものを入れる必要がある（[design.md](./design.md) の pull の仕組みの節で、方式を選んだ理由を述べる）。
+
+## 6. 他のツールは、レジストリの認証をどう扱っているか
+
+調べた範囲では、レジストリに**問い合わせる側**のツールは、その認証を**自分の設定として別に持つ**。ワークロードの pull（kubelet）の認証とは別管理。
+検索で分かった範囲（ドキュメント。実機・ソースでは未確認）。
+
+| ツール | 問い合わせの認証 | pull |
+| --- | --- | --- |
+| [Argo CD Image Updater](https://argocd-image-updater.readthedocs.io/en/latest/basics/authentication/) | 自分の設定（ConfigMap `argocd-image-updater-cm` の `registries.conf`）。取得元は、`secret:`（Secret）、`pullsecret:<namespace>/<名前>`（`docker-registry` 型の Secret）、`env:`（環境変数）、`ext:`（認証情報を標準出力に出すスクリプト） | しない。新しいイメージを Argo CD のアプリケーションへ書き戻し、Argo CD の同期のあとに、kubelet がワークロードの `imagePullSecrets` で pull する |
+| [Flux の `ImageRepository`](https://fluxcd.io/flux/guides/cron-job-image-auth/) | `spec.secretRef`（`docker-registry` 型の Secret）、`spec.serviceAccountName`（その ServiceAccount の `imagePullSecrets`）、`spec.provider`（aws / azure / gcp。クラウドの IAM や Workload Identity）。何も指定しなければ匿名 | しない（Image Updater と同じ） |
+| Keel | 検索では確認できなかった（未確認） | 未確認 |
+
+Image Updater の細かい挙動（[ドキュメント](https://argocd-image-updater.readthedocs.io/en/v0.10.0/configuration/registries/)）:
+
+- 既定では、Image Updater を入れた namespace の Secret しか読めない。
+- 認証情報は、起動時に 1 回読んでキャッシュされる。変更の反映には、再起動が要る。短命のトークンは、`credsexpire`（有効期限）を指定すると、再取得される。
+
+### 本プロジェクトとの比較
+
+| | 問い合わせの認証 | pull の認証 |
+| --- | --- | --- |
+| Image Updater、Flux | 自分の設定（Secret の参照、環境変数、スクリプト、クラウドの IAM） | ワークロード側（kubelet） |
+| 本プロジェクト（`pinner`） | `pinner` を動かす環境から、そのレジストリにログインできていること | ノード側（kubelet の credential provider、ノード上の `config.json`、containerd の設定） |
+
+2 系統に分かれる点は同じ。違いは、本プロジェクトは**自分で pull もする**（pull 用の Pod を作る）こと。上のツールは、問い合わせるだけで、pull は kubelet 任せ。
+そのため、本プロジェクトには、「ノードに pull させる」ための認証（ノード側）も要る。
+
+### 取り入れられる方式（未実装。必要になったら検討する）
+
+- Flux のように、ServiceAccount の `imagePullSecrets` から、問い合わせの認証を作る。
+- Image Updater のように、`docker-registry` 型の Secret を名前で指定して読む。
+- `ext:` のように、スクリプトに認証情報を出させる（短命のトークン向け）。
+
+いずれも、`pinner` がクラスタの Secret（または ServiceAccount）を読む権限が要る。「`pinner` を動かす環境にログインを用意する」手間は減る。

@@ -38,7 +38,6 @@ type Node struct {
 	Client dynamic.Interface
 
 	PullNamespace string        // namespace for the pull Pods (default "default")
-	PullSecret    string        // optional imagePullSecret name in PullNamespace
 	PullTimeout   time.Duration // per node (default 2m)
 }
 
@@ -207,9 +206,6 @@ func (n *Node) pullOn(ctx context.Context, node, ref, digest string) (string, er
 			"imagePullPolicy": "Always",
 			"command":         []interface{}{"/floatingtag-pinner-pull-only"},
 		}},
-	}
-	if n.PullSecret != "" {
-		spec["imagePullSecrets"] = []interface{}{map[string]interface{}{"name": n.PullSecret}}
 	}
 	pod := &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "v1", "kind": "Pod",

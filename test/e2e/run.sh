@@ -256,7 +256,7 @@ run_in e2e-multi trigger || fail "trigger exited non-zero"
 expect 'msg="trigger match"'
 expect_not 'msg="trigger mismatch"'
 
-step "private registry: pull needs --pull-secret"
+step "private registry: pull works when the nodes hold the credentials (kubelet reads config.json)"
 AUTH_PORT=5002
 AUTH_NAME=kind-registry-auth
 PRIVATE="localhost:${AUTH_PORT}/e2e/private:latest"
@@ -276,15 +276,20 @@ export DOCKER_CONFIG="${WORK}/docker" # where pinner (and docker) find the regis
 docker login "localhost:${AUTH_PORT}" -u e2e -p secret >/dev/null
 push_to "$PRIVATE" v1
 new_app e2e-private "$PRIVATE" 0
-kubectl -n e2e-private create secret docker-registry regcred \
-  --docker-server="localhost:${AUTH_PORT}" --docker-username=e2e --docker-password=secret
 
-# the registry answers pinner (credentials from DOCKER_CONFIG), but the node has no credentials to pull with
+# the registry answers pinner (credentials from DOCKER_CONFIG), but the nodes have no credentials to pull with
 if run_in e2e-private pull --pull-namespace e2e-private --pull-timeout 90s; then
-  fail "pull without --pull-secret must fail"
+  fail "pull must fail while the nodes have no credentials"
 fi
 expect 'msg="pull error".*state=not-pulled.*outcome=pull-failed'
-run_in e2e-private pull --pull-namespace e2e-private --pull-secret regcred || fail "pull with --pull-secret exited non-zero"
+
+# the credentials go on the nodes, where kubelet reads them (nothing is added to the Pod or its namespace)
+for node in $(kind get nodes --name "$CLUSTER"); do
+  docker cp "${DOCKER_CONFIG}/config.json" "${node}:/var/lib/kubelet/config.json"
+  docker exec "$node" systemctl restart kubelet
+done
+kubectl wait --for=condition=Ready node --all --timeout=120s
+run_in e2e-private pull --pull-namespace e2e-private || fail "pull exited non-zero with credentials on the nodes"
 expect 'msg="pull not-pulled".*outcome=pulled'
 expect 'msg="pull match".*via=pulling'
 kubectl -n e2e-private get pods -l app.kubernetes.io/managed-by=floatingtag-pinner -o name | grep -q . &&

@@ -130,7 +130,6 @@ type pullFlags struct {
 	*common
 	onNew       *string
 	pullNS      *string
-	pullSecret  *string
 	pullTimeout *time.Duration
 }
 
@@ -139,7 +138,6 @@ func registerPull(fs *flag.FlagSet) *pullFlags {
 		common:      registerCommon(fs, "report what would be pulled, without pulling"),
 		onNew:       fs.String("on-new", string(collector.OnNewRegister), "for images the local cache does not hold: register (pull) | ignore"),
 		pullNS:      fs.String("pull-namespace", "default", "namespace for the short-lived Pods that make nodes pull images"),
-		pullSecret:  fs.String("pull-secret", "", "imagePullSecret name (in --pull-namespace) for private registries"),
 		pullTimeout: fs.Duration("pull-timeout", 2*time.Minute, "per-node timeout for a pull"),
 	}
 }
@@ -152,7 +150,7 @@ func runPull(args []string) {
 }
 
 func setupPull(p *pullFlags) job {
-	c, onNew, pullNS, pullSecret, pullTimeout := p.common, p.onNew, p.pullNS, p.pullSecret, p.pullTimeout
+	c, onNew, pullNS, pullTimeout := p.common, p.onNew, p.pullNS, p.pullTimeout
 	rep := setupLogging(c, "pull", report.Match, report.Mismatch, report.NotPulled, report.Error)
 
 	policy, err := collector.ParseOnNew(*onNew)
@@ -163,7 +161,7 @@ func setupPull(p *pullFlags) job {
 	col := &collector.Collector{
 		Source:   c.kube(client),
 		Registry: registry.Remote{},
-		Local:    newLocal(*c.localKind, &local.Node{Client: client, PullNamespace: *pullNS, PullSecret: *pullSecret, PullTimeout: *pullTimeout}),
+		Local:    newLocal(*c.localKind, &local.Node{Client: client, PullNamespace: *pullNS, PullTimeout: *pullTimeout}),
 		OnNew:    policy,
 		DryRun:   *c.dryRun,
 	}

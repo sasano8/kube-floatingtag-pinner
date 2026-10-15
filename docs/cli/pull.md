@@ -33,5 +33,4 @@ pinner pull [flags]
 | `--namespace` | string | `-` | namespace to watch (default: all) |
 | `--on-new` | string | `register` | for images the local cache does not hold: register (pull) \| ignore |
 | `--pull-namespace` | string | `default` | namespace for the short-lived Pods that make nodes pull images |
-| `--pull-secret` | string | `-` | imagePullSecret name (in --pull-namespace) for private registries |
 | `--pull-timeout` | duration | `2m0s` | per-node timeout for a pull |

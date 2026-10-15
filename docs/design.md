@@ -162,7 +162,7 @@ pull のあとの状態を、pull 用 Pod が報告した digest から求める
 ### 認証と名前空間
 
 - `--pull-namespace`（既定 `default`）に Pod を作る。pull の認証は、Pod の pull の仕組みに従う: 基本はノード側
-  （kubelet の credential provider、kubelet が読むノード上の `config.json`、containerd の認証設定）。ノード側に置けない環境には `--pull-secret`（同じ名前空間の imagePullSecret）もある。
+  （kubelet の credential provider、kubelet が読むノード上の `config.json`、containerd の認証設定）。`imagePullSecrets` は扱わない（アプリのユーザーが、自分の権限の Secret で pull させるための仕組みで、運用する側のツールには合わない）。
 - リモートの digest 取得の認証は、`pinner` が動く環境の認証情報（備考: ggcr の既定のキーチェーン。docker の `config.json` と同じ形式のファイル）。手元から動かす前提。
 
 ### 必要な権限
@@ -426,7 +426,7 @@ Knative は、Revision を作ると、そのときリモートに問い合わせ
 | envtest | 本物の `kube-apiserver` と `etcd` だけを起動する（kubelet もノードも無い） | 使わない。pull 用 Pod、`Node.status.images` は kubelet が無いと確かめられないため |
 | e2e | kind（本物の kubelet と containerd）と、CI の中のローカルレジストリ | `test/e2e/run.sh` と `.github/workflows/e2e.yml`。**スキップが既定**（変数 `RUN_E2E` か手動で実行）。未実行 |
 
-- e2e はローカルレジストリを使う: 同じタグに別の内容を 2 回 push すれば「リモートのタグが動いた」状況を作れる。rate limit の影響も受けない。認証が要る場合（`--pull-secret`）は、htpasswd 付きの 2 つ目のレジストリ（`localhost:5002`）を建てて確かめる。
+- e2e はローカルレジストリを使う: 同じタグに別の内容を 2 回 push すれば「リモートのタグが動いた」状況を作れる。rate limit の影響も受けない。認証が要る場合は、htpasswd 付きの 2 つ目のレジストリ（`localhost:5002`）を建て、kind のノードに、kubelet が読む `config.json` を置いて確かめる。
   kind のノードの containerd に、`localhost:5001` をローカルレジストリへ向ける設定を入れる（kind の公式の手順）。
 - ノードの `status.images` の更新の遅れ（数分。pull のあとの状態を、pull 用 Pod が報告した digest から求める理由）は、kind でも再現されるはず。
   e2e は、ローカルの状態を読むステップの前に、`status.images` に反映されるまで待つ（`pull --dry-run` が `match` になるまで繰り返す）。

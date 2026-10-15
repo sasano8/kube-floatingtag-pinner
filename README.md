@@ -253,7 +253,7 @@ set_latest v1
 ```
 
 ghcr のパッケージは、初回は private なので、GitHub の Packages → `pinner-test` → Package settings → Change visibility → **Public** にする
-（private のままなら、imagePullSecret を作って、Deployment と `--pull-secret` に指定する）。
+（private のままなら、ノード側に認証情報を足す。「非公開レジストリ（認証）」の節を参照）。
 
 **2. Deployment を作る**（`imagePullPolicy: IfNotPresent`。Pod が作り直されたときに、ノードのタグが使われることを確かめるため）
 
@@ -488,10 +488,10 @@ internal/local/      ローカルキャッシュ（ノードのイメージス�
   - **containerd の認証設定**（`registry.configs` の `auth`、または `hosts.toml` の `header`）:
     containerd のバージョンで書き方が変わる。新しいバージョンでの扱いは要確認。
 
-  ノード側に置けない環境のために、`--pull-secret`（`--pull-namespace` の `imagePullSecret`）もある。
 - **リモートの digest の取得**: `pinner` が動く環境の認証情報を使う（備考: ggcr の既定のキーチェーン。docker の `config.json` と同じ形式のファイルを読む）。
 
-アプリのユーザーが、自分の権限の Secret で pull させたいときに使う `imagePullSecrets` は、`pinner` では扱わない。
+`imagePullSecrets`（Pod に結び付ける Secret）は、`pinner` では扱わない。アプリのユーザーが、自分の権限の Secret で pull させるための仕組みで、
+運用する側のツールである `pinner` は、ノード側の認証に任せる。
 
 ## テスト
 
@@ -499,7 +499,7 @@ internal/local/      ローカルキャッシュ（ノードのイメージス�
 - **e2e テスト**（[test/e2e/run.sh](./test/e2e/run.sh)）: kind（本物の kubelet と containerd）と、CI の中のローカルレジストリで、
   `pull`（`--dry-run`、状態の変化、ログのオプション）と `trigger`（`rollout`、`delete-pods`）に加えて、
   `error`、`not-pulled`、`not-running`、コンテナが自分で再起動して `mismatch` が消える場合、マルチ arch のイメージ（index の digest）、
-  認証つきのレジストリ（`--pull-secret` あり・なし）を、本物のクラスタで確かめる。
+  認証つきのレジストリ（ノード側に認証情報があるときと、ないとき）を、本物のクラスタで確かめる。
   レジストリを自前で建てるので、タグを自由に動かせる（Docker Hub の rate limit にも依存しない）。
   - **いまはスキップされる**（[.github/workflows/e2e.yml](./.github/workflows/e2e.yml)）。リポジトリの変数 `RUN_E2E` を `true` にすると、
     `main` への push と pull request で動く。手動（Actions の `e2e` → Run workflow）でも、変数に関係なく実行できる。

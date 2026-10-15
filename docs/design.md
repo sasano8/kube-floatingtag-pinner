@@ -166,6 +166,10 @@ pull のあとの状態を、pull 用 Pod が報告した digest から求める
 - リモートの digest 取得の認証（`pinner` 自身がレジストリに接続する）は、pull の認証（kubelet が接続する）とは**別**。
   `--credential <ファイル>`（`pull` のフラグ。docker の `config.json` と同じ形式。`registry.FileKeychain`）で渡す。そのファイルにないレジストリは、匿名。
   省略すると、既定のキーチェーン。ノードの `config.json` を指定すれば、認証の元を 1 つにできる（`pinner` をそのノード上で動かす場合）。
+- **すべてのフラグは、環境変数でも渡せる**（`parseFlags`、`cmd/pinner/env.go`）。名前は `PINNER_` + フラグ名の大文字（`-` は `_`）。
+  優先順位は、コマンドライン、環境変数、既定値。解析のあとに、コマンドラインに無かったフラグへ、`fs.Set` で値を入れる（型の検査は `flag` に任せる）。
+  変数が設定されていて空文字なら、空の値を入れる。読めない値は、変数名を添えたエラーにする。どの変数が値を入れたかを、`flagsFromEnv` に残し、エラーの出どころに使う。
+  Pod では、`args` を変えずに、`env:` で切り替えられる（デバッグの `PINNER_DEBUG=true` など）。
 - `--credential` は環境変数 `PINNER_CREDENTIAL` でも渡せる。決まり方（`resolveCredential`）: ①フラグ、②環境変数、③なし（既定のキーチェーン）。
   **フラグと環境変数が指すファイルが無ければ、エラー**（打ち間違いや、Secret のマウント忘れを検知する）。空（設定されていて空文字）は、認証なし。
 - コンテナイメージは、`ENV PINNER_CREDENTIAL=/credential/config.json` を持ち、そのパスに、認証情報のない JSON（`{"auths":{}}`）を置く。

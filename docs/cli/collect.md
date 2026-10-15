@@ -15,13 +15,15 @@ annotation の付いたリソースと、そのリソースが使っているイ
 pinner collect [flags]
 ```
 
+フラグは、環境変数でも渡せる（`PINNER_` + フラグ名の大文字、`-` は `_`）。優先順位は、コマンドライン、環境変数、既定値の順。
+
 ## フラグ
 
-| フラグ | 型 | 既定値 | 説明 |
-| --- | --- | --- | --- |
-| `--annotation` | string | `floatingtag-pinner/enabled` | annotation that marks target resources |
-| `--floating-tags` | string | `latest` | comma-separated tags to track; images with other tags are ignored (empty = all tags) |
-| `--kubeconfig` | string | `-` | path to kubeconfig (default: in-cluster, then ~/.kube/config) |
-| `--namespace` | string | `-` | namespace to watch (default: all) |
-| `-o` | string | `table` | shorthand for --output |
-| `--output` | string | `table` | output format: table\|json |
+| フラグ | 環境変数 | 型 | 既定値 | 説明 |
+| --- | --- | --- | --- | --- |
+| `--annotation` | `PINNER_ANNOTATION` | string | `floatingtag-pinner/enabled` | annotation that marks target resources |
+| `--floating-tags` | `PINNER_FLOATING_TAGS` | string | `latest` | comma-separated tags to track; images with other tags are ignored (empty = all tags) |
+| `--kubeconfig` | `PINNER_KUBECONFIG` | string | `-` | path to kubeconfig (default: in-cluster, then ~/.kube/config) |
+| `--namespace` | `PINNER_NAMESPACE` | string | `-` | namespace to watch (default: all) |
+| `-o` | `PINNER_O` | string | `table` | shorthand for --output |
+| `--output` | `PINNER_OUTPUT` | string | `table` | output format: table\|json |

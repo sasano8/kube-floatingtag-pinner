@@ -118,7 +118,8 @@ func renderCLIDocs() map[string]string {
 		var b strings.Builder
 		fmt.Fprintf(&b, "# pinner %s\n\n%s\n\n%s\n\n", c.name, c.summary, c.description)
 		fmt.Fprintf(&b, "## 使い方\n\n```\npinner %s [flags]\n```\n\n", c.name)
-		b.WriteString("## フラグ\n\n| フラグ | 型 | 既定値 | 説明 |\n| --- | --- | --- | --- |\n")
+		b.WriteString("フラグは、環境変数でも渡せる（`PINNER_` + フラグ名の大文字、`-` は `_`）。優先順位は、コマンドライン、環境変数、既定値の順。\n\n")
+		b.WriteString("## フラグ\n\n| フラグ | 環境変数 | 型 | 既定値 | 説明 |\n| --- | --- | --- | --- | --- |\n")
 		var flags []*flag.Flag
 		fs.VisitAll(func(f *flag.Flag) { flags = append(flags, f) })
 		sort.Slice(flags, func(i, j int) bool { return flags[i].Name < flags[j].Name })
@@ -131,7 +132,7 @@ func renderCLIDocs() map[string]string {
 			if def == "" {
 				def = "-"
 			}
-			fmt.Fprintf(&b, "| `%s` | %s | `%s` | %s |\n", flagName(f.Name), typ, def, strings.ReplaceAll(usage, "|", "\\|"))
+			fmt.Fprintf(&b, "| `%s` | `%s` | %s | `%s` | %s |\n", flagName(f.Name), envName(f.Name), typ, def, strings.ReplaceAll(usage, "|", "\\|"))
 		}
 		pages[c.name+".md"] = b.String()
 	}

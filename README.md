@@ -317,6 +317,12 @@ pinner trigger --namespace pinner-test           # trigger match
 「なぜ、このイメージが対象にならないのか」は、まず `collect` で確かめる。
 
 どのコマンドも、既定は 1 回実行して終了。`--daemon`（と `--interval`）で常駐して繰り返す。
+
+**フラグは、環境変数でも渡せる。** 名前は、`PINNER_` + フラグ名の大文字（`-` は `_`）。たとえば `--debug` は `PINNER_DEBUG=true`、
+`--log-level` は `PINNER_LOG_LEVEL=debug`、`--interval` は `PINNER_INTERVAL=10m`。優先順位は、コマンドライン、環境変数、既定値の順。
+Pod では、`args` を触らずに、`env:`（または `kubectl set env deploy/pinner PINNER_DEBUG=true`）で切り替えられる。
+環境変数の値が、そのフラグとして読めないとき（`PINNER_INTERVAL=soon` など）は、変数の名前を添えたエラーで止まる。
+各フラグの環境変数名は、[コマンドラインのドキュメント](./docs/cli/index.md)の表にある。
 第二段階はアクション（将来は Pod の削除など）の実行を伴うので、`pull` だけでは動かない。第二段階まで行うときは、`trigger` か `sync` を明示する。
 アクション（`trigger` がリソースにすること）は、ログ（報告）とは別のもの。
 

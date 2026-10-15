@@ -6,35 +6,20 @@ import (
 	"os"
 )
 
-// credentialEnv names the environment variable that sets --credential.
-const credentialEnv = "PINNER_CREDENTIAL"
-
-// resolveCredential decides which credential file to use ("" is none), and where that choice came from.
+// resolveCredential checks the credential file that --credential (or PINNER_CREDENTIAL, which sets the same
+// flag) names, and returns it ("" is none). source says where the value came from, for the error message.
 //
-//   - --credential given: that file (an empty value means none).
-//   - else PINNER_CREDENTIAL set: that file (set but empty means none, and the default is not looked at).
-//   - else none.
-//
-// A file named by the flag or the variable that does not exist is an error: it is a typo, or a Secret that
-// was not mounted. (The container image sets PINNER_CREDENTIAL to a file it holds, with no credentials in
-// it; whoever mounts a file over it gives pinner the credentials.)
-func resolveCredential(flagValue string, flagSet bool, lookupEnv func(string) (string, bool)) (path, source string, err error) {
-	explicit := func(p, src string) (string, string, error) {
-		if p == "" {
-			return "", src, nil
-		}
-		if err := mustBeFile(p); err != nil {
-			return "", src, fmt.Errorf("%s: %w", src, err)
-		}
-		return p, src, nil
+// A file that does not exist is an error: it is a typo, or a Secret that was not mounted. An empty value
+// means no credentials. (The container image sets PINNER_CREDENTIAL to a file it holds, with no
+// credentials in it; whoever mounts a file over it gives pinner the credentials.)
+func resolveCredential(value, source string) (string, error) {
+	if value == "" {
+		return "", nil
 	}
-	if flagSet {
-		return explicit(flagValue, "--credential")
+	if err := mustBeFile(value); err != nil {
+		return "", fmt.Errorf("%s: %w", source, err)
 	}
-	if v, ok := lookupEnv(credentialEnv); ok {
-		return explicit(v, credentialEnv)
-	}
-	return "", "", nil
+	return value, nil
 }
 
 func mustBeFile(p string) error {

@@ -128,7 +128,6 @@ func (j job) run() {
 // pullFlags are the flags of pull.
 type pullFlags struct {
 	*common
-	fs          *flag.FlagSet
 	onNew       *string
 	pullNS      *string
 	pullTimeout *time.Duration
@@ -137,19 +136,18 @@ type pullFlags struct {
 
 func registerPull(fs *flag.FlagSet) *pullFlags {
 	return &pullFlags{
-		fs:          fs,
 		common:      registerCommon(fs, "report what would be pulled, without pulling"),
 		onNew:       fs.String("on-new", string(collector.OnNewRegister), "for images the local cache does not hold: register (pull) | ignore"),
 		pullNS:      fs.String("pull-namespace", "default", "namespace for the short-lived Pods that make nodes pull images"),
 		pullTimeout: fs.Duration("pull-timeout", 2*time.Minute, "per-node timeout for a pull"),
-		credential:  fs.String("credential", "", "file in docker config.json format with the registry credentials to look up the remote digest (env "+credentialEnv+"; empty: none; default: the default keychain)"),
+		credential:  fs.String("credential", "", "file in docker config.json format with the registry credentials to look up the remote digest (empty: none; default: the default keychain)"),
 	}
 }
 
 func runPull(args []string) {
 	fs := flag.NewFlagSet("pinner pull", flag.ExitOnError)
 	p := registerPull(fs)
-	fs.Parse(args)
+	parseFlags(fs, args)
 	setupPull(p).run()
 }
 
@@ -162,9 +160,11 @@ func setupPull(p *pullFlags) job {
 		fatal(err)
 	}
 	remote := registry.Remote{}
-	flagSet := false
-	p.fs.Visit(func(f *flag.Flag) { flagSet = flagSet || f.Name == "credential" })
-	credFile, credSource, err := resolveCredential(*p.credential, flagSet, os.LookupEnv)
+	credSource := "--credential"
+	if v, ok := flagsFromEnv["credential"]; ok {
+		credSource = v
+	}
+	credFile, err := resolveCredential(*p.credential, credSource)
 	if err != nil {
 		fatal(err)
 	}
@@ -203,7 +203,7 @@ func registerTrigger(fs *flag.FlagSet) *triggerFlags {
 func runTrigger(args []string) {
 	fs := flag.NewFlagSet("pinner trigger", flag.ExitOnError)
 	t := registerTrigger(fs)
-	fs.Parse(args)
+	parseFlags(fs, args)
 	setupTrigger(t).run()
 }
 

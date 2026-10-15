@@ -10,7 +10,7 @@ import (
 // runDocs writes the generated command-line documentation: `pinner docs [dir]` (default docs/cli).
 func runDocs(args []string) {
 	fs := flag.NewFlagSet("pinner docs", flag.ExitOnError)
-	fs.Parse(args)
+	parseFlags(fs, args)
 	dir := "docs/cli"
 	if fs.NArg() > 0 {
 		dir = fs.Arg(0)

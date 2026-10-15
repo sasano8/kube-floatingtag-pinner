@@ -31,7 +31,7 @@ func registerCollect(fs *flag.FlagSet) *collectFlags {
 func runCollect(args []string) {
 	fs := flag.NewFlagSet("pinner collect", flag.ExitOnError)
 	cf := registerCollect(fs)
-	fs.Parse(args)
+	parseFlags(fs, args)
 	sel, output := cf.selection, cf.output
 	if *output != "table" && *output != "json" {
 		fatal(fmt.Errorf("unknown --output %q (want table|json)", *output))

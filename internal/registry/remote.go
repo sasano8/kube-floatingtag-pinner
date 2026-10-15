@@ -11,15 +11,22 @@ import (
 )
 
 // Remote asks the registry for the digest only; the image is not downloaded.
-// Credentials come from the default keychain (files in the same format as docker's config.json, among others).
-type Remote struct{}
+// Credentials come from Keychain; when it is nil, from the default keychain (files in the same format as
+// docker's config.json, among others).
+type Remote struct {
+	Keychain authn.Keychain
+}
 
-func (Remote) Digest(ctx context.Context, image string) (string, error) {
+func (r Remote) Digest(ctx context.Context, image string) (string, error) {
 	ref, err := name.ParseReference(image)
 	if err != nil {
 		return "", fmt.Errorf("parse %q: %w", image, err)
 	}
-	d, err := remote.Head(ref, remote.WithContext(ctx), remote.WithAuthFromKeychain(authn.DefaultKeychain))
+	keychain := r.Keychain
+	if keychain == nil {
+		keychain = authn.DefaultKeychain
+	}
+	d, err := remote.Head(ref, remote.WithContext(ctx), remote.WithAuthFromKeychain(keychain))
 	if err != nil {
 		return "", err
 	}

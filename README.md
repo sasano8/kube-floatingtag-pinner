@@ -177,7 +177,7 @@ pinner collect              # kubeconfig のクラスタで、annotation の付�
   `/var/lib/kubelet/config.json` を編集する（置き場所は要確認）。設定の仕方は、公式のドキュメントを参照:
   [Configuring nodes to authenticate to a private registry](https://kubernetes.io/docs/concepts/containers/images/#configuring-nodes-to-authenticate-to-a-private-registry)、
   [kubelet credential provider](https://kubernetes.io/docs/tasks/administer-cluster/kubelet-credential-provider/)。
-- **`pinner` を動かす環境**: `pinner` も、レジストリにリモートの digest を問い合わせる。そのレジストリにログインできていること。
+- **`pinner` が、リモートの digest を問い合わせるとき**: `pull` の `--credential <ファイル>`（docker の `config.json` と同じ形式）。ノードの `config.json` を、そのまま指定してもよい。
 
 公開のイメージなら、何も要らない。認証が足りないと、`collect` / `pull` は `error`（リモートの digest が取れない）、`pull` は `outcome=pull-failed`（ノードの pull が失敗）になる。
 
@@ -489,9 +489,14 @@ internal/local/      ローカルキャッシュ（ノードのイメージス�
 
 ## 非公開レジストリ（認証）
 
-認証が要るのは、2 か所。
+認証が要るのは、**別々の 2 か所**。それぞれ、別に設定する。
 
-- **pull（ノードの pull）**: pull は Pod の仕組みで動くので、認証も **Pod の pull の仕組み**に従う。`pinner` は、pull 用の Pod に何も付けない。
+| | 誰がレジストリに接続するか | 認証の設定 |
+| --- | --- | --- |
+| リモートの digest の取得（`HEAD`） | `pinner` 自身 | `--credential <ファイル>`（`pull` のフラグ）。ファイルは、docker の `config.json` と同じ形式。省略すると、`pinner` を動かす環境の認証（既定のキーチェーン） |
+| pull（ノードへの取得） | pull 用の Pod（kubelet） | ノード側に認証情報を足す（下） |
+
+- **pull の認証**: pull は Pod の仕組みで動くので、認証も **Pod の pull の仕組み**に従う。`pinner` は、pull 用の Pod に何も付けない。
   ノード側に認証情報を足しておく（次のどれか）。マニフェストには何も書かなくてよい。
   - **kubelet の credential provider**（kubelet の `--image-credential-provider-config`、`--image-credential-provider-bin-dir`）:
     クラウドのレジストリ（ECR、GCR、ACR など）向け。固定のユーザー名とパスワードには、プラグインを自作する必要がある。
@@ -499,11 +504,15 @@ internal/local/      ローカルキャッシュ（ノードのイメージス�
     固定のユーザー名とパスワードなら、手軽。ノードごとに置く。
   - **containerd の認証設定**（`registry.configs` の `auth`、または `hosts.toml` の `header`）:
     containerd のバージョンで書き方が変わる。新しいバージョンでの扱いは要確認。
-
-- **リモートの digest の取得**: `pinner` が動く環境の認証情報を使う（備考: ggcr の既定のキーチェーン。docker の `config.json` と同じ形式のファイルを読む）。
+- **ノードの `config.json` を、`--credential` にも使う**と、認証の元が 1 つになる（`pinner` をそのノード上で動かす場合）。
+  例: `pinner pull --credential /var/lib/kubelet/config.json`。
 
 `imagePullSecrets`（Pod に結び付ける Secret）は、`pinner` では扱わない。アプリのユーザーが、自分の権限の Secret で pull させるための仕組みで、
 運用する側のツールである `pinner` は、ノード側の認証に任せる。
+
+**残課題**: `pinner` をノード上で動かし、containerd に CRI で直接 pull させる方式（`--pull-via cri`（仮））。
+認証が 1 つのファイルで済み、`Node.status.images` の遅れ（数分）もなくなるが、ノード上での実行が前提で、実装が増える。
+[docs/design.md](./docs/design.md) の「検討中のこと」を参照。
 
 ## テスト
 
@@ -538,3 +547,4 @@ Keel・Knative 本体・Argo CD Image Updater では、ksvc の `latest` 追従�
 - コマンド名（`pull` / `trigger`）は決定。両方を続けて行う `sync` は仮。
 - `sync`（`pull` → `trigger`）。
 - 任意のレジストリを同期先にする `--local`（`registry`）。
+- ノード上で CRI を直接使う `--pull-via cri`（仮）。上の「非公開レジストリ（認証）」と、[docs/design.md](./docs/design.md) の「検討中のこと」を参照。

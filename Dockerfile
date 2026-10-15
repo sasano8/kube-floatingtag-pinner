@@ -6,10 +6,15 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
-    go build -trimpath -ldflags="-s -w -X main.commit=${COMMIT} -X main.defaultCredential=/credential/config.json" -o /out/pinner ./cmd/pinner
+    go build -trimpath -ldflags="-s -w -X main.commit=${COMMIT}" -o /out/pinner ./cmd/pinner
+# A credential file with no credentials in it: PINNER_CREDENTIAL points at it, so that pinner always finds a file.
+# (The final image has no shell, so it is made here.)
+RUN mkdir /out/credential && echo '{"auths":{}}' > /out/credential/config.json
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/pinner /pinner
-# Mount the registry credentials (docker config.json format) at /credential/config.json; PINNER_CREDENTIAL
-# or --credential name another file. If nothing is mounted there, pinner runs without credentials.
+COPY --from=build --chown=nonroot:nonroot /out/credential /credential
+# Mount the registry credentials (docker config.json format) over /credential/config.json; to use another file,
+# set PINNER_CREDENTIAL (empty: no credentials).
+ENV PINNER_CREDENTIAL=/credential/config.json
 ENTRYPOINT ["/pinner"]

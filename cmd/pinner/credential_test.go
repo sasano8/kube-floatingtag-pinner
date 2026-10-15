@@ -19,32 +19,25 @@ func TestResolveCredential(t *testing.T) {
 	os.WriteFile(other, []byte(`{}`), 0o600)
 	missing := filepath.Join(dir, "missing.json")
 
-	defer func(old string) { defaultCredential = old }(defaultCredential)
-
 	cases := []struct {
 		name       string
-		def        string
 		flagValue  string
 		flagSet    bool
 		env        map[string]string
 		want       string
 		wantErrHas string
 	}{
-		{name: "nothing, no default: none"},
-		{name: "default location present: used", def: file, want: file},
-		{name: "default location absent: none, not an error", def: missing},
+		{name: "nothing: none"},
 		{name: "flag wins over the variable", flagValue: file, flagSet: true, env: map[string]string{credentialEnv: other}, want: file},
 		{name: "variable alone", env: map[string]string{credentialEnv: other}, want: other},
-		{name: "variable wins over the default", def: file, env: map[string]string{credentialEnv: other}, want: other},
-		{name: "variable set but empty: none, the default is not looked at", def: file, env: map[string]string{credentialEnv: ""}},
-		{name: "flag empty: none, the default is not looked at", def: file, flagSet: true},
+		{name: "variable set but empty: none", env: map[string]string{credentialEnv: ""}},
+		{name: "flag empty: none, whatever the variable says", env: map[string]string{credentialEnv: file}, flagSet: true},
 		{name: "flag names a missing file: error (a typo)", flagValue: missing, flagSet: true, wantErrHas: "does not exist"},
 		{name: "variable names a missing file: error (a Secret not mounted)", env: map[string]string{credentialEnv: missing}, wantErrHas: credentialEnv},
 		{name: "a directory is an error", flagValue: dir, flagSet: true, wantErrHas: "is a directory"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			defaultCredential = c.def
 			got, _, err := resolveCredential(c.flagValue, c.flagSet, env(c.env))
 			if c.wantErrHas != "" {
 				if err == nil || !strings.Contains(err.Error(), c.wantErrHas) {

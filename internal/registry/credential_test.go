@@ -75,3 +75,16 @@ func TestFileKeychainErrors(t *testing.T) {
 		t.Error("invalid JSON must be an error")
 	}
 }
+
+// The container image holds a credential file with no credentials in it.
+func TestFileKeychainEmpty(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	os.WriteFile(path, []byte(`{"auths":{}}`), 0o600)
+	k, err := registry.FileKeychain(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resolve(t, k, "ghcr.io/o/app:latest"); got != (authn.AuthConfig{}) {
+		t.Errorf("no credentials expected: %+v", got)
+	}
+}

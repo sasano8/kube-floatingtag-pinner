@@ -9,19 +9,15 @@ import (
 // credentialEnv names the environment variable that sets --credential.
 const credentialEnv = "PINNER_CREDENTIAL"
 
-// defaultCredential is where the credential file is looked for when nothing says otherwise. It is empty in
-// a plain build; the container image sets it at build time (-X main.defaultCredential=...), so that a Secret
-// can be mounted there.
-var defaultCredential string
-
 // resolveCredential decides which credential file to use ("" is none), and where that choice came from.
 //
 //   - --credential given: that file (an empty value means none).
 //   - else PINNER_CREDENTIAL set: that file (set but empty means none, and the default is not looked at).
-//   - else the default location, if it exists. Not being there is the usual case, and means none.
+//   - else none.
 //
 // A file named by the flag or the variable that does not exist is an error: it is a typo, or a Secret that
-// was not mounted. Only the default location may be absent.
+// was not mounted. (The container image sets PINNER_CREDENTIAL to a file it holds, with no credentials in
+// it; whoever mounts a file over it gives pinner the credentials.)
 func resolveCredential(flagValue string, flagSet bool, lookupEnv func(string) (string, bool)) (path, source string, err error) {
 	explicit := func(p, src string) (string, string, error) {
 		if p == "" {
@@ -37,9 +33,6 @@ func resolveCredential(flagValue string, flagSet bool, lookupEnv func(string) (s
 	}
 	if v, ok := lookupEnv(credentialEnv); ok {
 		return explicit(v, credentialEnv)
-	}
-	if defaultCredential != "" && mustBeFile(defaultCredential) == nil {
-		return defaultCredential, "default location", nil
 	}
 	return "", "", nil
 }
